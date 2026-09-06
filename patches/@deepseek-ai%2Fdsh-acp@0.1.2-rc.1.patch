@@ -1,0 +1,125 @@
+diff --git a/lib/index.js b/lib/index.js
+index d2adce08d0af56b1a3635b20d0eb8f08742026d6..a1d61b5e4437cfc2f987341a221af4b35b60fbf5 100644
+--- a/lib/index.js
++++ b/lib/index.js
+@@ -583,6 +583,24 @@ async function assistantUpdates(ctx, session, event) {
+ 	if (usage !== void 0) updates.push(usage);
+ 	return updates;
+ }
++/** Convert one process-local model delta into a standard ACP live update. */
++function liveAssistantUpdate(frame) {
++	if (frame.type !== "chunk") return;
++	return liveAssistantChunkUpdate(frame.chunk, frame.attemptId);
++}
++/** Convert one model chunk into a standard ACP live update. */
++function liveAssistantChunkUpdate(chunk, messageId) {
++	if (chunk.type === "text-delta") return {
++		sessionUpdate: "agent_message_chunk",
++		messageId,
++		content: { type: "text", text: chunk.text }
++	};
++	if (chunk.type === "reasoning-delta") return {
++		sessionUpdate: "agent_thought_chunk",
++		messageId,
++		content: { type: "text", text: chunk.text }
++	};
++}
+ /**
+ * Start one generic ACP tool lifecycle from the durable call fact.
+ * @param event - committed DSH tool-call event.
+@@ -675,6 +693,8 @@ var AcpSession = class AcpSession {
+ 	inflight;
+ 	closing;
+ 	pendingSelections = /* @__PURE__ */ new Map();
++	liveAttemptTurns = /* @__PURE__ */ new Map();
++	liveOutputTurns = /* @__PURE__ */ new Set();
+ 	constructor(ctx, handle, modelControl, notify) {
+ 		this.ctx = ctx;
+ 		this.notify = notify;
+@@ -872,6 +892,28 @@ var AcpSession = class AcpSession {
+ 		this.cancelPrompt("ACP prompt cancelled");
+ 		if (inflight === void 0) this.agent.cancel({ kind: "user" });
+ 	}
++	/** Forward model deltas before the durable assistant message is committed. */
++	onAssistantStream(frame) {
++		if (frame.type === "start") {
++			this.liveAttemptTurns.set(frame.attemptId, frame.turn);
++			return;
++		}
++		const turn = this.liveAttemptTurns.get(frame.attemptId);
++		if (frame.type === "end") {
++			this.liveAttemptTurns.delete(frame.attemptId);
++			return;
++		}
++		const update = liveAssistantUpdate(frame);
++		if (turn === void 0 || update === void 0) return;
++		this.liveOutputTurns.add(turn);
++		const previous = this.outputTail;
++		this.outputTail = previous.then(() => this.notify({
++			sessionId: this.agent.session.id,
++			update
++		})).catch((error) => {
++			this.ctx.logger.warn(`acp: live assistant update delivery failed: ${errorChain(error)}`);
++		});
++	}
+ 	/**
+ 	* Process one durable event and enqueue its standard ACP projections.
+ 	* @param session - exact event-owning Session.
+@@ -879,13 +921,31 @@ var AcpSession = class AcpSession {
+ 	*/
+ 	onSessionEvent(session, event) {
+ 		try {
++			if (event.type === "assistant/chunk") {
++				const { turn, step, chunk } = event.data;
++				const update = liveAssistantChunkUpdate(chunk, `turn:${turn}:step:${step}`);
++				if (update === void 0) return;
++				this.liveOutputTurns.add(turn);
++				const previous = this.outputTail;
++				this.outputTail = previous.then(() => this.notify({
++					sessionId: this.agent.session.id,
++					update
++				})).catch((error) => {
++					this.ctx.logger.warn(`acp: legacy live assistant update delivery failed: ${errorChain(error)}`);
++				});
++				return;
++			}
+ 			if (event.type === "assistant/message") {
+ 				const inflight = this.inflight?.turn === event.data.turn ? this.inflight : void 0;
++				const streamedLive = this.liveOutputTurns.has(event.data.turn);
+ 				const delivery = this.outputTail.then(async () => {
+-					for (const update of await assistantUpdates(this.ctx, session, event)) await this.notify({
+-						sessionId: this.agent.session.id,
+-						update
+-					});
++					for (const update of await assistantUpdates(this.ctx, session, event)) {
++						if (streamedLive && (update.sessionUpdate === "agent_message_chunk" || update.sessionUpdate === "agent_thought_chunk")) continue;
++						await this.notify({
++							sessionId: this.agent.session.id,
++							update
++						});
++					}
+ 				});
+ 				this.outputTail = delivery.catch((error) => {
+ 					const failure = error;
+@@ -912,7 +972,10 @@ var AcpSession = class AcpSession {
+ 		} finally {
+ 			const inflight = this.inflight;
+ 			if (inflight !== void 0 && event.type === "turn/end" && inflight.turn === event.data.turn) inflight.endReason = event.data.reason;
+-			if (event.type === "turn/end") this.modelControl.releaseTurn(event.data.turn);
++			if (event.type === "turn/end") {
++				this.liveOutputTurns.delete(event.data.turn);
++				this.modelControl.releaseTurn(event.data.turn);
++			}
+ 		}
+ 	}
+ 	/**
+@@ -1106,6 +1169,9 @@ function apply(ctx, config) {
+ 		const record = sessions.get(session.header.id);
+ 		if (record?.ownsSession(session) === true) record.onSessionEvent(session, event);
+ 	});
++	ctx.on("agent/assistant-stream", ({ agent, frame }) => {
++		ownedRecord(agent)?.onAssistantStream(frame);
++	}, { global: true });
+ 	ctx.on("agent/inbox/claimed", ({ agent, message, turn }) => {
+ 		ownedRecord(agent)?.onInboxClaimed(message, turn);
+ 	});

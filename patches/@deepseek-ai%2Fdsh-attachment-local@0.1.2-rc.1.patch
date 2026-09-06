@@ -1,0 +1,19 @@
+diff --git a/lib/index.js b/lib/index.js
+index a56dc3d..bf44956 100644
+--- a/lib/index.js
++++ b/lib/index.js
+@@ -5,7 +5,13 @@ import { resolveDshHome } from "@deepseek-ai/dsh-home-paths";
+ import { createHash, randomUUID } from "node:crypto";
+ import { constants } from "node:fs";
+ import { chmod, link, mkdir, open, readFile, rename, rm, unlink, writeFile } from "node:fs/promises";
+-import sharp from "sharp";
++import { createRequire } from "node:module";
++const require = createRequire(import.meta.url);
++let sharpModule;
++function sharp(...args) {
++	sharpModule ??= require("sharp");
++	return sharpModule(...args);
++}
+ //#region lib/types/compression-limiter.js
+ /** Instance-owned concurrency bound for native image transformations. */
+ /** FIFO limiter for asynchronous compression work. */

@@ -1,0 +1,178 @@
+diff --git a/lib/index.js b/lib/index.js
+index 9c99aab..eede538 100644
+--- a/lib/index.js
++++ b/lib/index.js
+@@ -23,6 +23,7 @@ const RFC6052_PREFIX_LENGTHS = [
+ ];
+ const IPV4ONLY_DISCOVERY_HOST = "ipv4only.arpa";
+ const IPV4ONLY_SENTINELS = new Set(["192.0.0.170", "192.0.0.171"]);
++const DEFAULT_FAKE_IP_DOH_URL = "https://1.1.1.1/dns-query";
+ /**
+ * Return whether an address is globally reachable unicast. IPv4-mapped IPv6 is
+ * classified by its embedded IPv4 address; transition and translation prefixes
+@@ -42,6 +43,54 @@ function isPublicIpAddress(input) {
+ 	if (parsed.isIPv4MappedAddress()) return parsed.toIPv4Address().range() === "unicast";
+ 	return parsed.range() === "unicast";
+ }
++/** True only for the RFC 2544 benchmarking block commonly used by proxy fake-IP DNS. */
++function isProxyFakeIpAddress(input) {
++	try {
++		const parsed = ipaddr.parse(stripIpv6Brackets(input));
++		if (!(parsed instanceof ipaddr.IPv4)) return false;
++		const octets = parsed.toByteArray();
++		return octets[0] === 198 && (octets[1] === 18 || octets[1] === 19);
++	} catch {
++		return false;
++	}
++}
++/** Resolve a fake-IP hostname through a fixed-IP DoH endpoint, retaining only address records. */
++async function resolveThroughDoh(hostname, signal, endpoint) {
++	let base;
++	try {
++		base = new URL(endpoint);
++	} catch (error) {
++		throw new WebError(`invalid fake-IP DoH endpoint: ${endpoint}`, "WEB_PROVIDER_ERROR", { cause: error });
++	}
++	if (base.protocol !== "https:" || isIP(base.hostname) === 0 || !isPublicIpAddress(base.hostname)) throw new WebError("fake-IP DoH endpoint must be an HTTPS URL with a public IP-literal hostname", "WEB_PROVIDER_ERROR");
++	const addresses = [];
++	for (const type of ["A", "AAAA"]) {
++		const url = new URL(base);
++		url.searchParams.set("name", hostname);
++		url.searchParams.set("type", type);
++		let response;
++		try {
++			response = await fetch(url, {
++				headers: { accept: "application/dns-json" },
++				redirect: "error",
++				signal
++			});
++		} catch (error) {
++			throw new WebError(`fake-IP DoH lookup failed: ${String(error)}`, "WEB_PROVIDER_ERROR", { cause: error });
++		}
++		if (!response.ok) throw new WebError(`fake-IP DoH lookup failed with HTTP ${response.status}`, "WEB_PROVIDER_ERROR");
++		const payload = await response.json();
++		for (const answer of Array.isArray(payload.Answer) ? payload.Answer : []) {
++			const family = answer?.type === 1 ? 4 : answer?.type === 28 ? 6 : 0;
++			if (family !== 0 && typeof answer.data === "string" && isIP(answer.data) === family) addresses.push({
++				address: answer.data,
++				family
++			});
++		}
++	}
++	if (addresses.length === 0) throw new WebError(`hostname "${hostname}" resolved to no addresses through fake-IP DoH`, "WEB_PROVIDER_ERROR");
++	return addresses.filter((entry, index, all) => all.findIndex((candidate) => candidate.address === entry.address && candidate.family === entry.family) === index);
++}
+ /**
+ * Resolve a hostname once and reject the complete answer set if any destination
+ * is not public. The returned addresses are the only ones the transport may use.
+@@ -51,10 +100,10 @@ function isPublicIpAddress(input) {
+ * @param resolver - lookup implementation, overridden only by focused tests.
+ * @returns the validated, non-empty address set.
+ */
+-async function resolvePublicAddresses(hostname, signal, resolver = lookup) {
++async function resolvePublicAddresses(hostname, signal, resolver = lookup, fakeIpDohURL) {
+ 	const unbracketed = stripIpv6Brackets(hostname);
+ 	const literalFamily = isIP(unbracketed);
+-	const resolved = literalFamily === 0 ? await raceWithSignal(resolver(unbracketed, {
++	let resolved = literalFamily === 0 ? await raceWithSignal(resolver(unbracketed, {
+ 		all: true,
+ 		order: "verbatim"
+ 	}), signal) : [{
+@@ -62,6 +111,11 @@ async function resolvePublicAddresses(hostname, signal, resolver = lookup) {
+ 		family: literalFamily
+ 	}];
+ 	if (resolved.length === 0) throw new WebError(`hostname "${hostname}" resolved to no addresses`, "WEB_PROVIDER_ERROR");
++	let proxyFakeAddresses;
++	if (literalFamily === 0 && fakeIpDohURL !== void 0 && fakeIpDohURL.length > 0 && resolved.every((entry) => isProxyFakeIpAddress(entry.address))) {
++		proxyFakeAddresses = resolved;
++		resolved = await resolveThroughDoh(unbracketed, signal, fakeIpDohURL);
++	}
+ 	const nat64Prefixes = resolved.some((entry) => entry.family === 6 && isIP(entry.address) === 6) ? await discoverNat64Prefixes(signal, resolver) : [];
+ 	const addresses = [];
+ 	for (const entry of resolved) {
+@@ -74,7 +128,9 @@ async function resolvePublicAddresses(hostname, signal, resolver = lookup) {
+ 			family: entry.family
+ 		});
+ 	}
+-	return addresses;
++	// A fake-IP TUN requires connecting to its synthetic address. DoH addresses above
++	// are the authorization result; the original mapping remains the transport route.
++	return proxyFakeAddresses ?? addresses;
+ }
+ /** Discover the active DNS64 prefix set using RFC 7050's reserved hostname. */
+ async function discoverNat64Prefixes(signal, resolver) {
+@@ -594,7 +650,8 @@ const Config = z.object({
+ 	maxBodyChars: z.number().default(1e5),
+ 	timeoutMs: z.number().default(3e4),
+ 	maxRedirects: z.number().default(5),
+-	userAgent: z.string().default(DEFAULT_USER_AGENT)
++	userAgent: z.string().default(DEFAULT_USER_AGENT),
++	fakeIpDohURL: z.string().default(DEFAULT_FAKE_IP_DOH_URL)
+ });
+ /** A resource limit (byte/char/length/timeout cap) must be a positive finite number. */
+ function assertPositiveFinite(name, value) {
+@@ -623,7 +680,7 @@ function apply(ctx, config) {
+ 		maxRedirects: resolved.maxRedirects,
+ 		userAgent: resolved.userAgent
+ 	};
+-	ctx.web.registerFetchProvider(new HttpFetchProvider(limits));
++	ctx.web.registerFetchProvider(new HttpFetchProvider(limits, (hostname, signal) => resolvePublicAddresses(hostname, signal, lookup, resolved.fakeIpDohURL)));
+ }
+ //#endregion
+-export { Config, DEFAULT_USER_AGENT, HttpFetchProvider, LOCAL_FETCH_PROVIDER_ID, apply, inject, name };
++export { Config, DEFAULT_FAKE_IP_DOH_URL, DEFAULT_USER_AGENT, HttpFetchProvider, LOCAL_FETCH_PROVIDER_ID, apply, inject, isProxyFakeIpAddress, name, resolvePublicAddresses };
+diff --git a/lib/types/index.d.ts b/lib/types/index.d.ts
+index 8414671..f5c5dbe 100644
+--- a/lib/types/index.d.ts
++++ b/lib/types/index.d.ts
+@@ -8,6 +8,8 @@ import type { Context } from '@deepseek-ai/cordis';
+ import z from '@deepseek-ai/schemastery';
+ export { LOCAL_FETCH_PROVIDER_ID, HttpFetchProvider, } from './provider.ts';
+ export type { HttpFetchLimits, HttpFetchResolver } from './provider.ts';
++export { isProxyFakeIpAddress, resolvePublicAddresses } from './network.ts';
++export declare const DEFAULT_FAKE_IP_DOH_URL = "https://1.1.1.1/dns-query";
+ /** Default `User-Agent`: an explicit product agent, never a browser disguise. */
+ export declare const DEFAULT_USER_AGENT = "deepseek-harness/0.0.1 (+https://github.com/deepseek-ai)";
+ /** Cordis plugin name used by loader diagnostics. */
+@@ -26,8 +28,10 @@ export interface Config {
+     maxRedirects?: number;
+     /** `User-Agent` header sent on every request. */
+     userAgent?: string;
++    /** Fixed-IP DNS-over-HTTPS endpoint used only when system DNS returns RFC 2544 fake IPs. */
++    fakeIpDohURL?: string;
+ }
+ export declare const Config: z<Config>;
+ /** Register the local HTTP(S) fetch provider with `ctx.web`. */
+ export declare function apply(ctx: Context, config: Config): void;
+-//# sourceMappingURL=index.d.ts.map
+\ No newline at end of file
++//# sourceMappingURL=index.d.ts.map
+diff --git a/lib/types/network.d.ts b/lib/types/network.d.ts
+index 9369cd5..7ecbba3 100644
+--- a/lib/types/network.d.ts
++++ b/lib/types/network.d.ts
+@@ -35,6 +35,8 @@ export type AddressResolver = (hostname: string, options: {
+  * @returns true only for a public unicast destination.
+  */
+ export declare function isPublicIpAddress(input: string): boolean;
++/** True only for the RFC 2544 benchmarking block commonly used by proxy fake-IP DNS. */
++export declare function isProxyFakeIpAddress(input: string): boolean;
+ /**
+  * Resolve a hostname once and reject the complete answer set if any destination
+  * is not public. The returned addresses are the only ones the transport may use.
+@@ -44,7 +46,7 @@ export declare function isPublicIpAddress(input: string): boolean;
+  * @param resolver - lookup implementation, overridden only by focused tests.
+  * @returns the validated, non-empty address set.
+  */
+-export declare function resolvePublicAddresses(hostname: string, signal: AbortSignal, resolver?: AddressResolver): Promise<PublicAddress[]>;
++export declare function resolvePublicAddresses(hostname: string, signal: AbortSignal, resolver?: AddressResolver, fakeIpDohURL?: string): Promise<PublicAddress[]>;
+ /**
+  * Fetch through an Undici agent whose lookup callback returns only the already
+  * validated address set. The URL hostname remains intact for HTTP Host and TLS SNI.
+@@ -70,4 +72,4 @@ type LookupCallback = (error: NodeJS.ErrnoException | null, address: string | Lo
+  */
+ export declare function createPinnedLookup(addresses: readonly PublicAddress[]): (hostname: string, options: LookupOptions, callback: LookupCallback) => void;
+ export {};
+-//# sourceMappingURL=network.d.ts.map
+\ No newline at end of file
++//# sourceMappingURL=network.d.ts.map

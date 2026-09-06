@@ -1,0 +1,5 @@
+node_modules/
+# Spike scratch space: throwaway DSH_HOME + workspaces.
+# Reports under .tmp/reports/ are the deliverable — archive them into the
+# decision record by hand rather than committing them from here.
+.tmp/

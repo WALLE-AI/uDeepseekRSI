@@ -1,0 +1,20 @@
+diff --git a/lib/profile-boot-BTzzdrGY.js b/lib/profile-boot-BTzzdrGY.js
+index 7785f03..7a17769 100644
+--- a/lib/profile-boot-BTzzdrGY.js
++++ b/lib/profile-boot-BTzzdrGY.js
+@@ -1,5 +1,5 @@
+ import { writeFileSync } from "node:fs";
+-import { fileURLToPath } from "node:url";
++import { fileURLToPath, pathToFileURL } from "node:url";
+ import { PROFILE_PATCH_FILENAME, boot, composeEntries, healProfilesModuleFallback, installFailLoud, loadOptionalPatches, loadOverlayPatches, loadProfile, watchUserPatches } from "@deepseek-ai/dsh-app-boot";
+ import { join, resolve } from "node:path";
+ import { resolveDshHome } from "@deepseek-ai/dsh-home-paths";
+@@ -267,7 +267,7 @@ async function runProfile(options) {
+ 			exit: (code) => void shutdown.shutdown(code),
+ 			ready: appReady.service
+ 		});
+-	});
++	}, pathToFileURL(INSTALL_ANCHOR).href);
+ 	app.current = ctx;
+ 	if (composed.profile.patchReload === "live" && !signalShutdown.signal.aborted && ctx.fiber.state === 2 && ctx.get("loader") !== void 0) try {
+ 		if (ctx.get("hmr") === void 0) {

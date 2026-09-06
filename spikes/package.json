@@ -1,0 +1,32 @@
+{
+  "name": "udeepseekrsi-spikes",
+  "private": true,
+  "description": "Phase-0 blocking feasibility spikes for the AionUi-shell + deepseek-harness-engine plan.",
+  "type": "module",
+  "scripts": {
+    "s0-1": "node --env-file-if-exists=../.env s0-1-acp-lifecycle.mjs",
+    "s0-2": "node s0-2-koffi-electron.mjs",
+    "s0-3": "node s0-3-crash-consistency.mjs",
+    "s0-5": "node s0-5-contract-inventory.mjs",
+    "s0-8": "node --env-file-if-exists=../.env --import tsx s0-8-product-bridge.ts",
+    "all": "npm run s0-1 && npm run s0-2 && npm run s0-3 && npm run s0-5 && npm run s0-8"
+  },
+  "dependencies": {
+    "@agentclientprotocol/sdk": "1.4.0",
+    "@deepseek-ai/dsh": "0.1.2-rc.1",
+    "@deepseek-ai/dsh-subagent-claude-code": "0.1.2-rc.1",
+    "@deepseek-ai/dsh-subagent-codex": "0.1.2-rc.1"
+  },
+  "devDependencies": {
+    "electron": "37.10.3"
+  },
+  "engines": {
+    "node": "^22.19.0 || >=24"
+  },
+  "//dependencies": [
+    "EXACT versions, never ranges, never `latest`.",
+    "npm dist-tags are mutable and may lag; the selected release and complete dependency closure are locked by package-lock.json.",
+    "@agentclientprotocol/sdk is pinned to the exact version deepseek-harness itself depends on",
+    "(see opensource/deepseek-harness/packages/subagent/subagent-acp/package.json)."
+  ]
+}

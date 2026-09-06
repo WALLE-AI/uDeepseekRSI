@@ -1,0 +1,8 @@
+<svg class="w-5.5 h-5.5 absolute inset-0 m-auto" viewBox="0 0 80 80" fill="none" xmlns="http://www.w3.org/2000/svg">
+                            <rect x="4" y="4" width="72" height="72" rx="17" fill="#111820"></rect>
+                            <!-- 上方的"^"代表A - 更圆润的线条 -->
+                            <path d="M20 24V44C20 56 28 63 40 63C52 63 60 56 60 44V24" stroke="#45D7A5" stroke-width="7" fill="none" stroke-linecap="round"></path>
+                            <!-- 中间的"."代表i - 中心圆点 -->
+                            <path d="M27 25L34 49L40 39L46 49L53 25" stroke="#F7F9F8" stroke-width="6" fill="none" stroke-linecap="round" stroke-linejoin="round"></path>
+                            <!-- 下方的弧线代表UI - 更圆润的底部弧线 -->
+                        </svg>

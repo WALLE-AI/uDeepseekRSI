@@ -1,0 +1,42 @@
+# S0-7 provider composition. Credentials remain in their native stores.
+- id: llm-pi-ai
+  config:
+    providers:
+      spike-gateway:
+        displayName: Spike Gateway
+        apiKeyEnv: DEEPSEEK_API_KEY
+        api: openai-completions
+        baseURL: !!js process.env.DEEPSEEK_BASE_URL ?? process.env.DEEPSEEK_URL
+        compat:
+          thinkingFormat: deepseek
+          supportsDeveloperRole: false
+        models:
+          - id: deepseek-ai/DeepSeek-V4-Flash
+            name: DeepSeek-V4-Flash
+            contextWindow: 65536
+            maxTokens: 8192
+
+- id: agent-default-model
+  config:
+    provider: spike-gateway
+    model: deepseek-ai/DeepSeek-V4-Flash
+
+- insert:
+    - id: subagent-codex
+      name: '@deepseek-ai/dsh-subagent-codex'
+    - id: subagent-claude-code
+      name: '@deepseek-ai/dsh-subagent-claude-code'
+    - id: tool-subagent-codex
+      name: '@deepseek-ai/dsh-tool-subagent'
+      config:
+        provider: codex
+        toolName: subagent_codex
+        backgroundMode: one-shot
+        maxDepth: provider-managed
+    - id: tool-subagent-claude-code
+      name: '@deepseek-ai/dsh-tool-subagent'
+      config:
+        provider: claude-code
+        toolName: subagent_claude_code
+        backgroundMode: one-shot
+        maxDepth: provider-managed

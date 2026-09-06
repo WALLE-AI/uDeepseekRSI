@@ -1,0 +1,39 @@
+- id: llm-deepseek
+  disabled: true
+
+- id: llm-pi-ai
+  config:
+    providers:
+      aionui-deepseek:
+        displayName: DeepSeek (.env configured)
+        apiKeyEnv: DEEPSEEK_API_KEY
+        api: openai-completions
+        baseURL: !!js process.env.DEEPSEEK_URL
+        compat:
+          thinkingFormat: deepseek
+          supportsDeveloperRole: false
+        models: !!js >-
+          JSON.parse(process.env.AIONUI_DEEPSEEK_MODELS_JSON || '["deepseek-ai/DeepSeek-V4-Flash"]')
+          .map((id) => ({ id, name: id, contextWindow: 65536, maxTokens: 8192 }))
+- id: acp
+  config:
+    provider: aionui-deepseek
+    model: deepseek-ai/DeepSeek-V4-Flash
+
+- id: web-search-deepseek
+  config:
+    apiKeyEnv: DEEPSEEK_SEARCH_API_KEY
+    baseURL: !!js process.env.DEEPSEEK_SEARCH_BASE_URL || 'https://api.deepseek.com/anthropic/v1'
+
+- id: web-fetch-http
+  config:
+    fakeIpDohURL: !!js process.env.DSH_WEB_FETCH_DOH_URL || 'https://1.1.1.1/dns-query'
+
+- id: sandbox-policy
+  config:
+    mode: workspace-write
+    workspaceRoot: !!js process.cwd()
+
+- id: approval
+  config:
+    policy: ask

@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- AionUI Logo - 黑色背景版本 -->
+  
+  <!-- 黑色圆角背景 -->
+  <rect x="56" y="56" width="912" height="912" rx="216" fill="#111820"/>
+  
+  <!-- 简单白色边框 -->
+  
+  <!-- 上方的"^"代表A - 白色填充 -->
+  <path d="M256 296V548C256 701 357 786 512 786C667 786 768 701 768 548V296" stroke="#45D7A5" stroke-width="92" fill="none" stroke-linecap="round"/>
+  
+  <!-- 中间的"."代表i - 白色圆点 -->
+  <path d="M344 306L432 618L512 486L592 618L680 306" stroke="#F7F9F8" stroke-width="78" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  
+  <!-- 下方的弧线代表UI - 白色弧线 -->
+</svg> 
