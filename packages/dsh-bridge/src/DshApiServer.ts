@@ -106,7 +106,8 @@ export type DshApiServerOptions = {
   }) => DshAgentPort;
 };
 
-const DSH_PROVIDER_ID = 'deepseek-official';
+const DEFAULT_DSH_PROVIDER_ID = 'deepseek-official';
+const GATEWAY_DSH_PROVIDER_ID = 'aionui-gateway';
 const DEFAULT_MODEL_ID = 'deepseek-v4-flash';
 const ASSISTANT_ID = 'dsh:deepseek-harness';
 
@@ -127,8 +128,12 @@ function modelCatalogEndpoint(baseUrl: string): string {
   return url.toString();
 }
 
-function toDshModelValue(modelId: string): string {
-  return JSON.stringify([DSH_PROVIDER_ID, modelId]);
+function gatewayBaseUrl(env: NodeJS.ProcessEnv): string | undefined {
+  return env.DEEPSEEK_URL?.trim() || env.DEEPSEEK_BASE_URL?.trim() || undefined;
+}
+
+function toDshModelValue(providerId: string, modelId: string): string {
+  return JSON.stringify([providerId, modelId]);
 }
 
 function toUiModelId(value: unknown): string {
@@ -251,9 +256,11 @@ export class DshApiServer {
   #port = 0;
   #models: ModelCatalogEntry[] = [{ id: DEFAULT_MODEL_ID, label: DEFAULT_MODEL_ID }];
   #officePreview: OfficePreviewPort;
+  #providerId: string;
 
   constructor(options: DshApiServerOptions) {
     this.#options = options;
+    this.#providerId = gatewayBaseUrl(options.env ?? process.env) ? GATEWAY_DSH_PROVIDER_ID : DEFAULT_DSH_PROVIDER_ID;
     this.#officePreview =
       options.officePreviewPort ??
       new OfficePreviewService({
@@ -453,7 +460,7 @@ export class DshApiServer {
 
   async #loadModelCatalog(): Promise<void> {
     const env = this.#options.env ?? process.env;
-    const baseUrl = env.DEEPSEEK_URL?.trim();
+    const baseUrl = gatewayBaseUrl(env);
     if (!baseUrl) return;
 
     try {
@@ -1379,7 +1386,7 @@ export class DshApiServer {
           const body = await readJsonBody(request);
           const configId = decodeURIComponent(tail.slice('config-options/'.length));
           const requestedValue = String(body.value ?? '');
-          const bridgeValue = configId === 'model' ? toDshModelValue(requestedValue) : requestedValue;
+          const bridgeValue = configId === 'model' ? toDshModelValue(this.#providerId, requestedValue) : requestedValue;
           const session = await this.#bridge?.setConfigOption(conversationId, configId, bridgeValue);
           if (configId === 'model') conversation.extra.current_model_id = requestedValue;
           const configOptions = this.#uiConfigOptions(

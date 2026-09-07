@@ -123,6 +123,72 @@ describe('direct DeepSeek Harness HTTP backend', () => {
     );
   }, 30_000);
 
+  it('starts a session through the OpenAI-compatible gateway adapter', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-gateway-'));
+    const modelsServer = createHttpServer((request, response) => {
+      expect(request.url).toBe('/v1/models');
+      response.writeHead(200, { 'Content-Type': 'application/json' });
+      response.end(JSON.stringify({ data: [{ id: 'zai-org/GLM-5.3' }] }));
+    });
+    await new Promise<void>((resolveListen) => modelsServer.listen(0, '127.0.0.1', resolveListen));
+    const address = modelsServer.address();
+    if (!address || typeof address === 'string') throw new Error('Gateway fixture server did not start.');
+    const server = new DshApiServer({
+      cwd: root,
+      dshHome: join(root, 'dsh'),
+      dataFile: join(root, 'state.json'),
+      patchPaths: [resolvePath('.aionui/dsh-aionui.patch.yml')],
+      env: {
+        DEEPSEEK_URL: `http://127.0.0.1:${address.port}/v1`,
+        DEEPSEEK_API_KEY: 'gateway-api-key',
+      },
+    });
+    cleanups.push(async () => {
+      await server.stop();
+      await new Promise<void>((resolveClose) => modelsServer.close(() => resolveClose()));
+      await rm(root, { recursive: true, force: true });
+    });
+
+    const serverPort = await server.start();
+    const created = (await (
+      await fetch(`http://127.0.0.1:${serverPort}/api/conversations`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ extra: { workspace: root } }),
+      })
+    ).json()) as { data: { id: string } };
+    const ensureResponse = await fetch(
+      `http://127.0.0.1:${serverPort}/api/conversations/${created.data.id}/runtime/ensure`,
+      { method: 'POST' }
+    );
+    const ensured = (await ensureResponse.json()) as {
+      data: { config_options: Array<{ id: string; current_value: string }> };
+    };
+
+    expect(ensureResponse.status).toBe(200);
+    expect(ensured.data.config_options.find((option) => option.id === 'model')?.current_value).toBe('zai-org/GLM-5.3');
+  }, 30_000);
+
+  it('uses the official provider when switching models without a gateway', async () => {
+    const { baseUrl, setConfigCalls } = await createServer();
+    const created = (await (
+      await fetch(`${baseUrl}/api/conversations`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ extra: {} }),
+      })
+    ).json()) as { data: { id: string } };
+    await fetch(`${baseUrl}/api/conversations/${created.data.id}/runtime/ensure`, { method: 'POST' });
+
+    await fetch(`${baseUrl}/api/conversations/${created.data.id}/config-options/model`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ value: 'deepseek-v4-pro' }),
+    });
+
+    expect(setConfigCalls.at(-1)?.value).toBe('["deepseek-official","deepseek-v4-pro"]');
+  });
+
   it('loads pure model ids from /v1/models and only encodes the provider when setting dsh config', async () => {
     let authorization = '';
     const modelsServer = createHttpServer((request, response) => {
@@ -187,7 +253,7 @@ describe('direct DeepSeek Harness HTTP backend', () => {
         body: JSON.stringify({ value: 'deepseek-ai/DeepSeek-V4-Pro' }),
       })
     ).json()) as { data: { confirmation: string; config_options: Array<{ id: string; current_value: string }> } };
-    expect(setConfigCalls.at(-1)?.value).toBe('["deepseek-official","deepseek-ai/DeepSeek-V4-Pro"]');
+    expect(setConfigCalls.at(-1)?.value).toBe('["aionui-gateway","deepseek-ai/DeepSeek-V4-Pro"]');
     expect(switched.data.confirmation).toBe('observed');
     expect(switched.data.config_options.find((option) => option.id === 'model')?.current_value).toBe(
       'deepseek-ai/DeepSeek-V4-Pro'
