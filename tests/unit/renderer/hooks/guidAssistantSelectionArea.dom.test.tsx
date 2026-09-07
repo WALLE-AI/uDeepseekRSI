@@ -215,6 +215,27 @@ describe('AssistantSelectionArea', () => {
     expect(onSelectAssistant).toHaveBeenCalledWith('builtin-writer');
   });
 
+  it('renders localized office and coding mode buttons and selects their stable ids', () => {
+    const onSelectAssistant = vi.fn();
+    const modeAssistants = [
+      mkAssistant('dsh:office', 'DeepSeek Harness', 'generated', 'dsh:office', 0),
+      mkAssistant('dsh:coding', 'DeepSeek Harness', 'generated', 'dsh:coding', 1),
+    ];
+
+    render(
+      <AssistantSelectionArea
+        selectedAssistantId='dsh:office'
+        assistants={modeAssistants}
+        localeKey='en-US'
+        onSelectAssistant={onSelectAssistant}
+      />
+    );
+
+    expect(screen.getByText('agentMode.work.office')).toBeInTheDocument();
+    fireEvent.click(screen.getByText('agentMode.work.coding'));
+    expect(onSelectAssistant).toHaveBeenCalledWith('dsh:coding');
+  });
+
   it('orders assistant pills by group then sort_order before applying overflow', () => {
     render(
       <AssistantSelectionArea

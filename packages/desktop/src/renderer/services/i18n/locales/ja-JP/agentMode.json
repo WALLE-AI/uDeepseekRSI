@@ -18,5 +18,9 @@
   "switchMode": "権限モード",
   "switchSuccess": "モードを切り替えました",
   "switchPendingNextTurn": "次のターンから有効になります",
-  "switchFailed": "モードの切り替えに失敗しました"
+  "switchFailed": "モードの切り替えに失敗しました",
+  "work": {
+    "office": "オフィスモード",
+    "coding": "コーディングモード"
+  }
 }

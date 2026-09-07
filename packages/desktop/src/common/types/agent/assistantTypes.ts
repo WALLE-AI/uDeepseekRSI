@@ -11,6 +11,18 @@ export type AssistantSource = 'builtin' | 'generated' | 'user';
 export type AssistantAgentStatus = 'missing' | 'online' | 'offline' | 'unchecked';
 export type AssistantAgentSource = 'internal' | 'builtin' | 'extension' | 'custom';
 
+export const DSH_OFFICE_ASSISTANT_ID = 'dsh:office';
+export const DSH_CODING_ASSISTANT_ID = 'dsh:coding';
+export const LEGACY_DSH_ASSISTANT_ID = 'dsh:deepseek-harness';
+
+export type DshAssistantWorkMode = 'office' | 'coding';
+
+export function dshAssistantWorkMode(assistantId: string): DshAssistantWorkMode | undefined {
+  if (assistantId === DSH_OFFICE_ASSISTANT_ID) return 'office';
+  if (assistantId === DSH_CODING_ASSISTANT_ID || assistantId === LEGACY_DSH_ASSISTANT_ID) return 'coding';
+  return undefined;
+}
+
 export type AssistantAgent = {
   type: string;
   source: AssistantAgentSource;

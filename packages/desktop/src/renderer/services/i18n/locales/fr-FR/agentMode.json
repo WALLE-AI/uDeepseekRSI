@@ -18,5 +18,9 @@
   "switchMode": "Changer de mode",
   "switchSuccess": "Mode changé avec succès",
   "switchPendingNextTurn": "Prend effet au prochain tour",
-  "switchFailed": "Échec du changement de mode"
+  "switchFailed": "Échec du changement de mode",
+  "work": {
+    "office": "Mode bureautique",
+    "coding": "Mode codage"
+  }
 }

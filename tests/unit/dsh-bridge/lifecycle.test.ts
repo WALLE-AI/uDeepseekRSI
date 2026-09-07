@@ -1,5 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
-import { DshBridge, type DshAgentPort } from '../../../packages/dsh-bridge/src';
+import {
+  DshBridge,
+  DshRuntimePool,
+  normalizeDshWorkMode,
+  personaForDshWorkMode,
+  type DshAgentPort,
+} from '../../../packages/dsh-bridge/src';
 
 function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
   let resolve!: (value: T) => void;
@@ -57,5 +63,55 @@ describe('dsh bridge lifecycle', () => {
 
     await expect(bridge.start()).rejects.toThrow('Unsupported ACP protocol version');
     await expect(bridge.createSession('conversation-1', 'D:/workspace')).rejects.toThrow('has not started');
+  });
+});
+
+describe('dsh work mode runtime pool', () => {
+  it('starts each mode lazily and keeps conversations on their selected runtime', async () => {
+    const createdModes: string[] = [];
+    const ports = new Map<string, DshAgentPort>();
+    const pool = new DshRuntimePool({
+      createPort: (mode) => {
+        createdModes.push(mode);
+        const port = fakePort({
+          newSession: vi.fn(async () => ({ sessionId: `${mode}-session`, configOptions: [] })),
+        });
+        ports.set(mode, port);
+        return port;
+      },
+    });
+
+    expect(createdModes).toEqual([]);
+    await pool.createSession('office-conversation', 'D:/office', 'office');
+    await pool.createSession('coding-conversation', 'D:/code', 'coding');
+
+    expect(createdModes).toEqual(['office', 'coding']);
+    expect(pool.getSession('office-conversation')?.sessionId).toBe('office-session');
+    expect(pool.getSession('coding-conversation')?.sessionId).toBe('coding-session');
+    expect(ports.size).toBe(2);
+    await pool.dispose();
+  });
+
+  it('keeps the coding runtime usable when office initialization fails', async () => {
+    const pool = new DshRuntimePool({
+      createPort: (mode) =>
+        mode === 'office'
+          ? fakePort({ initialize: vi.fn(async () => ({ protocolVersion: 2, capabilities: {} })) })
+          : fakePort({ newSession: vi.fn(async () => ({ sessionId: 'coding-session', configOptions: [] })) }),
+    });
+
+    await expect(pool.createSession('office-conversation', 'D:/office', 'office')).rejects.toThrow(
+      'Unsupported ACP protocol version'
+    );
+    await expect(pool.createSession('coding-conversation', 'D:/code', 'coding')).resolves.toMatchObject({
+      sessionId: 'coding-session',
+    });
+    await pool.dispose();
+  });
+
+  it('maps legacy conversations to coding and gives each mode a distinct persona', () => {
+    expect(normalizeDshWorkMode(undefined, 'dsh:deepseek-harness')).toBe('coding');
+    expect(personaForDshWorkMode('office')).toContain('office productivity agent');
+    expect(personaForDshWorkMode('coding')).toContain('coding agent');
   });
 });

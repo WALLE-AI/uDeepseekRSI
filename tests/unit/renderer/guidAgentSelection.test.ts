@@ -5,6 +5,10 @@ import {
   pickDefaultAssistantSelectionKey,
   resolveAssistantSelectionKey,
 } from '@/renderer/pages/guid/hooks/useGuidAssistantSelection';
+import { resolveAssistantName } from '@/renderer/utils/model/assistantDisplay';
+
+const translateWorkMode = (key: 'agentMode.work.office' | 'agentMode.work.coding') =>
+  key === 'agentMode.work.office' ? '办公模式' : '编码模式';
 
 describe('guid assistant selection helpers', () => {
   const assistants: Assistant[] = [
@@ -24,6 +28,35 @@ describe('guid assistant selection helpers', () => {
 
   it('defaults to the generated aionrs assistant when available', () => {
     expect(pickDefaultAssistantSelectionKey(assistants)).toBe('bare-aionrs');
+  });
+
+  it('defaults to office mode and migrates the legacy DeepSeek Harness selection to coding', () => {
+    const modeAssistants = [
+      assistant({ id: 'dsh:office', source: 'generated', runtimeKey: 'dsh:office', sort_order: 0 }),
+      assistant({ id: 'dsh:coding', source: 'generated', runtimeKey: 'dsh:coding', sort_order: 1 }),
+    ];
+
+    expect(pickDefaultAssistantSelectionKey(modeAssistants)).toBe('dsh:office');
+    expect(resolveAssistantSelectionKey('dsh:deepseek-harness', modeAssistants)).toBe('dsh:coding');
+  });
+
+  it('localizes built-in work mode names from their stable assistant ids', () => {
+    expect(
+      resolveAssistantName(
+        assistant({ id: 'dsh:office', source: 'generated', runtimeKey: 'dsh:office' }),
+        'zh-CN',
+        'Assistant',
+        translateWorkMode
+      )
+    ).toBe('办公模式');
+    expect(
+      resolveAssistantName(
+        assistant({ id: 'dsh:coding', source: 'generated', runtimeKey: 'dsh:coding' }),
+        'zh-CN',
+        'Assistant',
+        translateWorkMode
+      )
+    ).toBe('编码模式');
   });
 
   it('returns null when no assistants are available', () => {

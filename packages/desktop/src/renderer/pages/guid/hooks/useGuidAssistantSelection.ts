@@ -4,7 +4,14 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { assistantRuntimeKey, isAionrsAssistant, type Assistant } from '@/common/types/agent/assistantTypes';
+import {
+  assistantRuntimeKey,
+  DSH_CODING_ASSISTANT_ID,
+  DSH_OFFICE_ASSISTANT_ID,
+  isAionrsAssistant,
+  LEGACY_DSH_ASSISTANT_ID,
+  type Assistant,
+} from '@/common/types/agent/assistantTypes';
 import { configService } from '@/common/config/configService';
 import type { AcpModelInfo } from '../types';
 import type { AgentModeOption } from '@/renderer/utils/model/agentTypes';
@@ -77,6 +84,12 @@ export function resolveAssistantSelectionKey(
 ): string | undefined {
   if (!savedKey) return undefined;
 
+  if (savedKey === LEGACY_DSH_ASSISTANT_ID) {
+    return assistants.some((assistant) => assistant.id === DSH_CODING_ASSISTANT_ID)
+      ? DSH_CODING_ASSISTANT_ID
+      : undefined;
+  }
+
   if (savedKey.startsWith('custom:')) {
     const assistantId = savedKey.slice(7);
     return assistants.some((assistant) => assistant.id === assistantId) ? assistantId : undefined;
@@ -104,6 +117,7 @@ function persistGuidAssistantSelectionKey(assistantId: string): void {
 export function pickDefaultAssistantSelectionKey(assistants: Assistant[]): string | null {
   const enabledAssistants = assistants.filter((assistant) => assistant.enabled !== false);
   const preferred =
+    enabledAssistants.find((assistant) => assistant.id === DSH_OFFICE_ASSISTANT_ID) ??
     enabledAssistants.find((assistant) => assistant.source === 'generated' && isAionrsAssistant(assistant)) ??
     enabledAssistants.find((assistant) => isAionrsAssistant(assistant)) ??
     enabledAssistants[0];

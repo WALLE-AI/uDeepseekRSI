@@ -6,7 +6,15 @@ import { basename, dirname, extname, isAbsolute, join, relative, sep } from 'nod
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer, type WebSocket } from 'ws';
 import { createDshConnection } from './createDshConnection';
-import { DshBridge } from './DshBridge';
+import {
+  assistantIdForWorkMode,
+  DSH_WORK_MODES,
+  DshRuntimePool,
+  normalizeDshWorkMode,
+  personaForDshWorkMode,
+  workModeFromAssistantId,
+  type DshWorkMode,
+} from './DshRuntimePool';
 import { copyExternalFiles, executeProjectFsRequest, projectSnapshots } from './projectFsService';
 import {
   OfficePreviewError,
@@ -54,7 +62,12 @@ type StoredConversation = {
   assistant: { id: string; source: 'dsh'; name: string; avatar: string; backend: 'acp' };
   created_at: number;
   modified_at: number;
-  extra: Record<string, unknown> & { workspace: string; backend: 'acp'; current_model_id: string };
+  extra: Record<string, unknown> & {
+    workspace: string;
+    backend: 'acp';
+    current_model_id: string;
+    work_mode?: DshWorkMode;
+  };
   runtime: RuntimeSummary;
   prompt_capability?: { image: boolean; audio: boolean };
   session_id?: string;
@@ -100,16 +113,18 @@ export type DshApiServerOptions = {
   mcpServers?: readonly DshMcpServer[];
   desktopShell?: DesktopShellPort;
   officePreviewPort?: OfficePreviewPort;
-  agentPortFactory?: (handlers: {
-    onUpdate: (update: BridgeUpdate) => void;
-    onPermissionRequest: (request: BridgePermissionRequest) => Promise<BridgePermissionDecision>;
-  }) => DshAgentPort;
+  agentPortFactory?: (
+    handlers: {
+      onUpdate: (update: BridgeUpdate) => void;
+      onPermissionRequest: (request: BridgePermissionRequest) => Promise<BridgePermissionDecision>;
+    },
+    mode: DshWorkMode
+  ) => DshAgentPort;
 };
 
 const DEFAULT_DSH_PROVIDER_ID = 'deepseek-official';
 const GATEWAY_DSH_PROVIDER_ID = 'aionui-gateway';
 const DEFAULT_MODEL_ID = 'deepseek-v4-flash';
-const ASSISTANT_ID = 'dsh:deepseek-harness';
 
 type ModelCatalogEntry = { id: string; label: string };
 
@@ -249,7 +264,7 @@ export class DshApiServer {
     projects: [],
     workspaceBindings: [],
   };
-  #bridge: DshBridge | null = null;
+  #bridge: DshRuntimePool | null = null;
   #server: Server | null = null;
   #wsServer: WebSocketServer | null = null;
   #persistQueue: Promise<void> = Promise.resolve();
@@ -283,21 +298,23 @@ export class DshApiServer {
       onUpdate: (update: BridgeUpdate) => this.#handleUpdate(update),
       onPermissionRequest: (request: BridgePermissionRequest) => this.#requestPermission(request),
     };
-    const connection = this.#options.agentPortFactory
-      ? this.#options.agentPortFactory(handlers)
-      : createDshConnection({
-          cwd: this.#options.cwd,
-          dshHome: this.#options.dshHome,
-          patchPaths: this.#options.patchPaths,
-          mcpServers: this.#options.mcpServers,
-          env: {
-            ...this.#options.env,
-            AIONUI_DEEPSEEK_MODELS_JSON: JSON.stringify(this.#models.map((model) => model.id)),
-          },
-          ...handlers,
-        });
-    this.#bridge = new DshBridge({ port: connection });
-    await this.#bridge.start();
+    this.#bridge = new DshRuntimePool({
+      createPort: (mode) =>
+        this.#options.agentPortFactory
+          ? this.#options.agentPortFactory(handlers, mode)
+          : createDshConnection({
+              cwd: this.#options.cwd,
+              dshHome: mode === 'coding' ? this.#options.dshHome : join(this.#options.dshHome, 'modes', mode),
+              patchPaths: this.#options.patchPaths,
+              mcpServers: this.#options.mcpServers,
+              env: {
+                ...this.#options.env,
+                AIONUI_DEEPSEEK_MODELS_JSON: JSON.stringify(this.#models.map((model) => model.id)),
+                AIONUI_DSH_PERSONA: personaForDshWorkMode(mode),
+              },
+              ...handlers,
+            }),
+    });
 
     const server = createServer((request, response) => void this.#route(request, response));
     const wsServer = new WebSocketServer({ noServer: true });
@@ -488,6 +505,7 @@ export class DshApiServer {
 
   #normalizeStoredModels(): void {
     for (const conversation of this.#state.conversations) {
+      conversation.extra.work_mode = normalizeDshWorkMode(conversation.extra.work_mode, conversation.assistant.id);
       const currentModelId = toUiModelId(conversation.extra.current_model_id);
       conversation.extra.current_model_id = currentModelId;
       conversation.extra.cached_config_options = this.#uiConfigOptions(
@@ -754,14 +772,16 @@ export class DshApiServer {
 
   async #ensureSession(conversation: StoredConversation): Promise<void> {
     const workspace = await this.#workspaceForConversation(conversation);
+    const workMode = normalizeDshWorkMode(conversation.extra.work_mode, conversation.assistant.id);
+    conversation.extra.work_mode = workMode;
     const existingSession = this.#bridge?.getSession(conversation.id);
     if (existingSession) {
       if (!sameCanonicalPath(existingSession.cwd, workspace)) throw new Error('WORKSPACE_BINDING_MISMATCH');
       return;
     }
     const session = conversation.session_id
-      ? await this.#bridge?.resumeSession(conversation.id, conversation.session_id, workspace)
-      : await this.#bridge?.createSession(conversation.id, workspace);
+      ? await this.#bridge?.resumeSession(conversation.id, conversation.session_id, workspace, workMode)
+      : await this.#bridge?.createSession(conversation.id, workspace, workMode);
     if (!session) throw new Error('DeepSeek Harness bridge is unavailable.');
     conversation.session_id = session.sessionId;
     conversation.extra.acp_session_id = session.sessionId;
@@ -884,11 +904,17 @@ export class DshApiServer {
         return;
       }
       if (path === '/api/agents/management' || path === '/api/agents') {
-        responseData(response, [this.#agentRecord()]);
+        responseData(
+          response,
+          DSH_WORK_MODES.map((mode) => this.#agentRecord(mode))
+        );
         return;
       }
       if (path === '/api/assistants') {
-        responseData(response, [this.#assistantRecord()]);
+        responseData(
+          response,
+          DSH_WORK_MODES.map((mode) => this.#assistantRecord(mode))
+        );
         return;
       }
       const officePreviewMatch = path.match(/^\/api\/(word|excel|ppt)-preview\/(start|stop)$/);
@@ -913,11 +939,15 @@ export class DshApiServer {
         responseData(response, await this.#officePreview.start(filePath, documentType));
         return;
       }
-      if (
-        path === `/api/assistants/${encodeURIComponent(ASSISTANT_ID)}` ||
-        path === `/api/assistants/${ASSISTANT_ID}`
-      ) {
-        responseData(response, this.#assistantDetailRecord());
+      const assistantDetailMatch = path.match(/^\/api\/assistants\/(.+)$/);
+      if (assistantDetailMatch && method === 'GET') {
+        const assistantId = decodeURIComponent(assistantDetailMatch[1]);
+        const mode = workModeFromAssistantId(assistantId);
+        if (!mode) {
+          responseData(response, { error: 'Assistant not found.', code: 'NOT_FOUND' }, 404);
+          return;
+        }
+        responseData(response, this.#assistantDetailRecord(mode));
         return;
       }
       if (path.startsWith('/api/shell/')) {
@@ -1032,6 +1062,16 @@ export class DshApiServer {
       if (path === '/api/conversations' && method === 'POST') {
         const body = await readJsonBody(request);
         const now = Date.now();
+        const assistantBody =
+          body.assistant && typeof body.assistant === 'object' ? (body.assistant as Record<string, unknown>) : {};
+        const requestedAssistantId = typeof assistantBody.id === 'string' ? assistantBody.id : undefined;
+        const workMode = requestedAssistantId ? workModeFromAssistantId(requestedAssistantId) : 'office';
+        if (!workMode) {
+          responseData(response, { error: 'Invalid DeepSeek Harness assistant.', code: 'INVALID_ASSISTANT' }, 400);
+          return;
+        }
+        const assistantId = assistantIdForWorkMode(workMode);
+        const assistantName = this.#workModeName(workMode);
         const extra = body.extra && typeof body.extra === 'object' ? (body.extra as Record<string, unknown>) : {};
         const requestedWorkspace =
           typeof extra.workspace === 'string' && extra.workspace ? extra.workspace : this.#options.cwd;
@@ -1039,12 +1079,12 @@ export class DshApiServer {
         const project = ensureWorkspaceProject(this.#state.projects, canonicalWorkspace);
         const conversation: StoredConversation = {
           id: typeof body.id === 'string' ? body.id : randomUUID().slice(0, 8),
-          name: typeof body.name === 'string' && body.name ? body.name : 'DeepSeek Harness',
+          name: typeof body.name === 'string' && body.name ? body.name : assistantName,
           type: 'acp',
           status: 'pending',
           source: 'aionui',
           pinned: false,
-          assistant: { id: ASSISTANT_ID, source: 'dsh', name: 'DeepSeek Harness', avatar: '', backend: 'acp' },
+          assistant: { id: assistantId, source: 'dsh', name: assistantName, avatar: '', backend: 'acp' },
           created_at: now,
           modified_at: now,
           extra: {
@@ -1052,6 +1092,7 @@ export class DshApiServer {
             workspace: canonicalWorkspace,
             backend: 'acp',
             current_model_id: this.#modelOptions()[0]?.id ?? DEFAULT_MODEL_ID,
+            work_mode: workMode,
           },
           project_id: project.id,
           runtime: idleRuntime(),
@@ -1223,6 +1264,7 @@ export class DshApiServer {
         }
         if (!tail && method === 'PATCH') {
           const body = await readJsonBody(request);
+          const workMode = normalizeDshWorkMode(conversation.extra.work_mode, conversation.assistant.id);
           if (typeof body.name === 'string') conversation.name = body.name;
           if (typeof body.pinned === 'boolean') conversation.pinned = body.pinned;
           if (body.extra && typeof body.extra === 'object') {
@@ -1254,12 +1296,22 @@ export class DshApiServer {
                 revision: (previous?.revision ?? 0) + 1,
               });
               conversation.project_id = project.id;
-              conversation.extra = { ...conversation.extra, ...nextExtra, workspace: canonicalWorkspace };
+              conversation.extra = {
+                ...conversation.extra,
+                ...nextExtra,
+                workspace: canonicalWorkspace,
+                work_mode: workMode,
+              };
               delete conversation.session_id;
               delete conversation.extra.acp_session_id;
               delete conversation.extra.cached_config_options;
             } else {
-              conversation.extra = { ...conversation.extra, ...nextExtra, workspace: conversation.extra.workspace };
+              conversation.extra = {
+                ...conversation.extra,
+                ...nextExtra,
+                workspace: conversation.extra.workspace,
+                work_mode: workMode,
+              };
             }
           }
           conversation.modified_at = Date.now();
@@ -1472,21 +1524,30 @@ export class DshApiServer {
     }
   }
 
-  #assistantRecord(): Record<string, unknown> {
+  #workModeName(mode: DshWorkMode): string {
+    return mode === 'office' ? 'Office Mode' : 'Coding Mode';
+  }
+
+  #workModeDescription(mode: DshWorkMode): string {
+    return mode === 'office' ? 'Documents, spreadsheets, presentations, and research' : 'Code, tests, and repositories';
+  }
+
+  #assistantRecord(mode: DshWorkMode): Record<string, unknown> {
+    const assistantId = assistantIdForWorkMode(mode);
     return {
-      id: ASSISTANT_ID,
-      name: 'DeepSeek Harness',
+      id: assistantId,
+      name: this.#workModeName(mode),
       name_i18n: {},
-      description: 'Direct deepseek-harness ACP backend',
+      description: this.#workModeDescription(mode),
       description_i18n: {},
       context_i18n: {},
       prompts_i18n: {},
       source: 'generated',
       avatar: '',
       enabled: true,
-      sort_order: 0,
-      agent_id: ASSISTANT_ID,
-      agent: { type: 'acp', source: 'builtin', acp_backend: ASSISTANT_ID },
+      sort_order: mode === 'office' ? 0 : 1,
+      agent_id: assistantId,
+      agent: { type: 'acp', source: 'builtin', acp_backend: assistantId },
       enabled_skills: [],
       custom_skill_names: [],
       disabled_builtin_skills: [],
@@ -1499,26 +1560,27 @@ export class DshApiServer {
     };
   }
 
-  #assistantDetailRecord(): Record<string, unknown> {
+  #assistantDetailRecord(mode: DshWorkMode): Record<string, unknown> {
     const defaultModelId = this.#defaultModelId();
+    const assistantId = assistantIdForWorkMode(mode);
     return {
-      id: ASSISTANT_ID,
+      id: assistantId,
       source: 'generated',
       agent_status: 'online',
       team_selectable: false,
       team_block_reason: 'Direct deepseek-harness sessions are single-agent.',
       deletable: false,
       profile: {
-        name: 'DeepSeek Harness',
+        name: this.#workModeName(mode),
         name_i18n: {},
-        description: 'Direct deepseek-harness ACP backend',
+        description: this.#workModeDescription(mode),
         description_i18n: {},
         avatar: '',
       },
-      state: { enabled: true, sort_order: 0 },
+      state: { enabled: true, sort_order: mode === 'office' ? 0 : 1 },
       engine: {
-        agent_id: ASSISTANT_ID,
-        agent: { type: 'acp', source: 'builtin', acp_backend: ASSISTANT_ID },
+        agent_id: assistantId,
+        agent: { type: 'acp', source: 'builtin', acp_backend: assistantId },
       },
       rules: { content: '', storage_mode: 'backend' },
       prompts: { recommended: [], recommended_i18n: {} },
@@ -1543,13 +1605,14 @@ export class DshApiServer {
     };
   }
 
-  #agentRecord(): Record<string, unknown> {
+  #agentRecord(mode: DshWorkMode): Record<string, unknown> {
     const defaultModelId = this.#defaultModelId();
     const configOptions = this.#uiConfigOptions([], defaultModelId);
+    const assistantId = assistantIdForWorkMode(mode);
     return {
-      id: ASSISTANT_ID,
-      name: 'DeepSeek Harness',
-      description: 'Direct deepseek-harness ACP backend',
+      id: assistantId,
+      name: this.#workModeName(mode),
+      description: this.#workModeDescription(mode),
       agent_type: 'acp',
       agent_source: 'builtin',
       enabled: true,

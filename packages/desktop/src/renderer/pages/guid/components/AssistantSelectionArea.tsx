@@ -5,8 +5,8 @@
  */
 
 import styles from '../index.module.css';
-import { assistantRuntimeKey, type Assistant } from '@/common/types/agent/assistantTypes';
-import { Down, Robot } from '@icon-park/react';
+import { assistantRuntimeKey, dshAssistantWorkMode, type Assistant } from '@/common/types/agent/assistantTypes';
+import { Briefcase, Code, Down, Robot } from '@icon-park/react';
 import { Button } from '@arco-design/web-react';
 import { AionSearchInput } from '@/renderer/components/base';
 import { useAssistantOrder } from '@/renderer/hooks/assistant/useAssistantOrder';
@@ -16,6 +16,7 @@ import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 're
 import { resolveAssistantAvatar } from '@/renderer/utils/model/assistantAvatar';
 import ThemedLogo from '@/renderer/components/agent/ThemedLogo';
 import { selectableAssistants } from '@/renderer/utils/model/assistantSelection';
+import { resolveAssistantName } from '@/renderer/utils/model/assistantDisplay';
 import { useTranslation } from 'react-i18next';
 
 /**
@@ -224,7 +225,8 @@ const AssistantSelectionArea: React.FC<AssistantSelectionAreaProps> = ({
   const renderAssistantPill = (assistant: Assistant, testId: string, fullWidth = false) => {
     const avatar = resolveAssistantAvatar(assistant.avatar);
     const isSelected = selectedId === assistant.id;
-    const label = assistant.name_i18n?.[localeKey] || assistant.name;
+    const workMode = dshAssistantWorkMode(assistant.id);
+    const label = resolveAssistantName(assistant, localeKey, assistant.id, t);
 
     return (
       <Button
@@ -252,6 +254,10 @@ const AssistantSelectionArea: React.FC<AssistantSelectionAreaProps> = ({
             <ThemedLogo src={avatar.value} alt='' className='object-contain' style={{ width: 20, height: 20 }} />
           ) : avatar.kind === 'emoji' ? (
             <span className={styles.assistantCardEmoji}>{avatar.value}</span>
+          ) : workMode === 'office' ? (
+            <Briefcase theme='outline' size={14} />
+          ) : workMode === 'coding' ? (
+            <Code theme='outline' size={14} />
           ) : (
             <Robot theme='outline' size={14} />
           )}

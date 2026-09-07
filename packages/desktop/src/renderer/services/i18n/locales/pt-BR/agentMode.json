@@ -18,5 +18,9 @@
   "switchMode": "Modo de Permissão",
   "switchSuccess": "Modo alternado com sucesso",
   "switchPendingNextTurn": "Entra em vigor no próximo turno",
-  "switchFailed": "Falha ao alternar modo"
+  "switchFailed": "Falha ao alternar modo",
+  "work": {
+    "office": "Modo de escritório",
+    "coding": "Modo de programação"
+  }
 }

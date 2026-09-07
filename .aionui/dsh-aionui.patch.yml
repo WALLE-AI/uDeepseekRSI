@@ -18,6 +18,10 @@
     provider: !!js "(process.env.DEEPSEEK_URL || process.env.DEEPSEEK_BASE_URL) ? 'aionui-gateway' : 'deepseek-official'"
     model: !!js JSON.parse(process.env.AIONUI_DEEPSEEK_MODELS_JSON || '["deepseek-v4-flash"]')[0] || 'deepseek-v4-flash'
 
+- id: system-prompt
+  config:
+    persona: !!js process.env.AIONUI_DSH_PERSONA || 'You are a coding agent. Your working directory is {{cwd}}.'
+
 - id: web-search-deepseek
   config:
     apiKeyEnv: DEEPSEEK_SEARCH_API_KEY

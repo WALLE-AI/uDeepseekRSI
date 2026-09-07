@@ -18,5 +18,9 @@
   "switchMode": "حالت مجوز",
   "switchSuccess": "حالت با موفقیت جابه‌جا شد",
   "switchPendingNextTurn": "از نوبت بعدی اعمال می‌شود",
-  "switchFailed": "جابه‌جایی حالت ناموفق بود"
+  "switchFailed": "جابه‌جایی حالت ناموفق بود",
+  "work": {
+    "office": "حالت اداری",
+    "coding": "حالت کدنویسی"
+  }
 }

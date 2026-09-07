@@ -18,5 +18,9 @@
   "switchMode": "授权模式",
   "switchSuccess": "模式切换成功",
   "switchPendingNextTurn": "将在下一轮生效",
-  "switchFailed": "模式切换失败"
+  "switchFailed": "模式切换失败",
+  "work": {
+    "office": "办公模式",
+    "coding": "编码模式"
+  }
 }

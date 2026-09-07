@@ -10,9 +10,10 @@ import type { TChatConversation } from '@/common/config/storage';
 import { ipcBridge } from '@/common';
 import { assistantRuntimeKey, type Assistant } from '@/common/types/agent/assistantTypes';
 import { resolveLocaleKey } from '@/common/utils';
-import type { AgentLogoMap } from '@/renderer/utils/model/agentLogo';
 import { resolveAgentLogo, useAgentLogos } from '@/renderer/utils/model/agentLogo';
 import { isLikelyLocalFilePath, resolveAssistantAvatar } from '@/renderer/utils/model/assistantAvatar';
+import { resolveAssistantName } from '@/renderer/utils/model/assistantDisplay';
+import type { TFunction } from 'i18next';
 import useSWR from 'swr';
 export interface PresetAssistantInfo {
   name: string;
@@ -211,9 +212,9 @@ function hasMatchingEnabledSkills(candidateSkills: string[] | undefined, enabled
 /**
  * Build assistant info from a backend-provided Assistant record.
  */
-function buildPresetInfoFromAssistant(assistant: Assistant, locale: string): PresetAssistantInfo {
+function buildPresetInfoFromAssistant(assistant: Assistant, locale: string, t: TFunction): PresetAssistantInfo {
   const localeKey = resolveLocaleKey(locale);
-  const name = assistant.name_i18n?.[localeKey] || assistant.name_i18n?.[locale] || assistant.name || assistant.id;
+  const name = resolveAssistantName(assistant, localeKey, assistant.id, t);
   const avatar = typeof assistant.avatar === 'string' ? assistant.avatar : '';
   const normalized = normalizeAvatar(avatar);
   return {
@@ -227,11 +228,13 @@ function buildPresetInfoFromAssistant(assistant: Assistant, locale: string): Pre
 }
 
 function buildPresetInfoFromConversationAssistant(
-  assistant: NonNullable<TChatConversation['assistant']>
+  assistant: NonNullable<TChatConversation['assistant']>,
+  locale: string,
+  t: TFunction
 ): PresetAssistantInfo {
   const normalized = normalizeAvatar(assistant.avatar);
   return {
-    name: assistant.name,
+    name: resolveAssistantName({ ...assistant, name_i18n: {} }, resolveLocaleKey(locale), assistant.id, t),
     logo: normalized.logo,
     isEmoji: normalized.isEmoji,
     isFallback: normalized.isFallback,
@@ -243,6 +246,7 @@ function buildPresetInfoFromConversationAssistant(
 function inferLegacyAssistantInfo(
   conversation: TChatConversation,
   locale: string,
+  t: TFunction,
   assistants?: Assistant[] | null
 ): PresetAssistantInfo | null {
   const { rules, enabled_skills } = extractLegacyPresetPayload(conversation);
@@ -256,12 +260,12 @@ function inferLegacyAssistantInfo(
       assistant.name_i18n?.['en-US'],
     ])
   );
-  if (byName) return buildPresetInfoFromAssistant(byName, locale);
+  if (byName) return buildPresetInfoFromAssistant(byName, locale, t);
 
   const bySkills = assistants?.filter((assistant) =>
     hasMatchingEnabledSkills(assistant.enabled_skills, enabled_skills)
   );
-  if (bySkills?.length === 1) return buildPresetInfoFromAssistant(bySkills[0], locale);
+  if (bySkills?.length === 1) return buildPresetInfoFromAssistant(bySkills[0], locale, t);
 
   return null;
 }
@@ -277,7 +281,7 @@ export function usePresetAssistantInfo(conversation: TChatConversation | undefin
   info: PresetAssistantInfo | null;
   isLoading: boolean;
 } {
-  const { i18n } = useTranslation();
+  const { i18n, t } = useTranslation();
   const logos = useAgentLogos();
 
   // Merged assistant catalog (builtin + user) from backend
@@ -314,13 +318,13 @@ export function usePresetAssistantInfo(conversation: TChatConversation | undefin
         ].filter((value, index, values) => Boolean(value) && values.indexOf(value) === index);
         const catalogAssistant = findAssistantByIdentityCandidates(assistantsList, snapshotCandidates);
         if (catalogAssistant) {
-          return { info: buildPresetInfoFromAssistant(catalogAssistant, locale), isLoading: false };
+          return { info: buildPresetInfoFromAssistant(catalogAssistant, locale, t), isLoading: false };
         }
         if (isLoadingAssistants) return { info: null, isLoading: true };
       }
 
       return {
-        info: buildPresetInfoFromConversationAssistant(conversation.assistant),
+        info: buildPresetInfoFromConversationAssistant(conversation.assistant, locale, t),
         isLoading: false,
       };
     }
@@ -373,10 +377,10 @@ export function usePresetAssistantInfo(conversation: TChatConversation | undefin
     };
 
     if (assistantMatch) {
-      return { info: buildPresetInfoFromAssistant(assistantMatch, locale), isLoading: false };
+      return { info: buildPresetInfoFromAssistant(assistantMatch, locale, t), isLoading: false };
     }
 
-    const inferredInfo = inferLegacyAssistantInfo(conversation, locale, assistantsList);
+    const inferredInfo = inferLegacyAssistantInfo(conversation, locale, t, assistantsList);
     if (inferredInfo) return { info: inferredInfo, isLoading: false };
 
     const { hasPayload } = extractLegacyPresetPayload(conversation);
@@ -440,5 +444,6 @@ export function usePresetAssistantInfo(conversation: TChatConversation | undefin
     remoteAgentId,
     remoteAgent,
     isLoadingRemoteAgent,
+    t,
   ]);
 }

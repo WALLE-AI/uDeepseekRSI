@@ -288,14 +288,9 @@ describe('direct DeepSeek Harness HTTP backend', () => {
     };
 
     expect(response.status).toBe(200);
-    expect(body.data).toHaveLength(1);
-    expect(body.data[0]).toMatchObject({
-      source: 'generated',
-      agent: { type: 'acp', acp_backend: 'dsh:deepseek-harness' },
-      name_i18n: {},
-    });
-    expect(body.data[0].models).toHaveLength(1);
-    expect(body.data[0].models.every((model) => typeof model === 'string')).toBe(true);
+    expect(body.data).toHaveLength(2);
+    expect(body.data.map((assistant) => assistant.agent.acp_backend)).toEqual(['dsh:office', 'dsh:coding']);
+    expect(body.data.every((assistant) => assistant.models.every((model) => typeof model === 'string'))).toBe(true);
 
     const detailResponse = await fetch(`${baseUrl}/api/assistants/dsh%3Adeepseek-harness`);
     const detail = (await detailResponse.json()) as {
@@ -304,6 +299,70 @@ describe('direct DeepSeek Harness HTTP backend', () => {
     expect(detail.data.defaults.model).toMatchObject({ mode: 'fixed' });
     expect(typeof detail.data.defaults.model.value).toBe('string');
     expect(detail.data.preferences.last_mcp_ids).toEqual([]);
+  });
+
+  it('persists the selected work mode on new conversations', async () => {
+    const { baseUrl } = await createServer();
+    const response = await fetch(`${baseUrl}/api/conversations`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ assistant: { id: 'dsh:coding' }, extra: {} }),
+    });
+    const created = (await response.json()) as {
+      data: { assistant: { id: string }; extra: { work_mode: string } };
+    };
+
+    expect(created.data.assistant.id).toBe('dsh:coding');
+    expect(created.data.extra.work_mode).toBe('coding');
+  });
+
+  it('does not allow a conversation work mode to change through extra updates', async () => {
+    const { baseUrl } = await createServer();
+    const created = (await (
+      await fetch(`${baseUrl}/api/conversations`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ assistant: { id: 'dsh:coding' }, extra: {} }),
+      })
+    ).json()) as { data: { id: string } };
+
+    const updateResponse = await fetch(`${baseUrl}/api/conversations/${created.data.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ extra: { work_mode: 'office' } }),
+    });
+    const conversation = (await (await fetch(`${baseUrl}/api/conversations/${created.data.id}`)).json()) as {
+      data: { extra: { work_mode: string } };
+    };
+
+    expect(updateResponse.status).toBe(200);
+    expect(conversation.data.extra.work_mode).toBe('coding');
+  });
+
+  it('maps the legacy assistant id to coding mode', async () => {
+    const { baseUrl } = await createServer();
+    const response = await fetch(`${baseUrl}/api/conversations`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ assistant: { id: 'dsh:deepseek-harness' }, extra: {} }),
+    });
+    const created = (await response.json()) as { data: { extra: { work_mode: string } } };
+
+    expect(response.status).toBe(201);
+    expect(created.data.extra.work_mode).toBe('coding');
+  });
+
+  it('rejects unknown assistant ids instead of silently changing modes', async () => {
+    const { baseUrl } = await createServer();
+    const response = await fetch(`${baseUrl}/api/conversations`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ assistant: { id: 'dsh:unknown' }, extra: {} }),
+    });
+    const body = (await response.json()) as { code: string };
+
+    expect(response.status).toBe(400);
+    expect(body.code).toBe('INVALID_ASSISTANT');
   });
 
   it('creates a conversation and persists a completed assistant turn', async () => {

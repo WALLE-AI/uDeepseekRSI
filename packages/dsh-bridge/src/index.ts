@@ -1,4 +1,16 @@
 export { DshBridge } from './DshBridge';
+export {
+  assistantIdForWorkMode,
+  DSH_CODING_ASSISTANT_ID,
+  DSH_OFFICE_ASSISTANT_ID,
+  DSH_WORK_MODES,
+  DshRuntimePool,
+  LEGACY_DSH_ASSISTANT_ID,
+  normalizeDshWorkMode,
+  personaForDshWorkMode,
+  workModeFromAssistantId,
+} from './DshRuntimePool';
+export type { DshWorkMode } from './DshRuntimePool';
 export { createDshConnection } from './createDshConnection';
 export { DshApiServer } from './DshApiServer';
 export type { DshApiServerOptions } from './DshApiServer';
