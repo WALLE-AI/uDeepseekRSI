@@ -106,8 +106,8 @@ export type DshApiServerOptions = {
   }) => DshAgentPort;
 };
 
-const DSH_PROVIDER_ID = 'aionui-deepseek';
-const DEFAULT_MODEL_ID = 'deepseek-ai/DeepSeek-V4-Flash';
+const DSH_PROVIDER_ID = 'deepseek-official';
+const DEFAULT_MODEL_ID = 'deepseek-v4-flash';
 const ASSISTANT_ID = 'dsh:deepseek-harness';
 
 type ModelCatalogEntry = { id: string; label: string };
@@ -492,10 +492,14 @@ export class DshApiServer {
     }
   }
 
-  #modelOptions(currentModelId = DEFAULT_MODEL_ID): ModelCatalogEntry[] {
-    return this.#models.some((model) => model.id === currentModelId)
+  #modelOptions(currentModelId?: string): ModelCatalogEntry[] {
+    return !currentModelId || this.#models.some((model) => model.id === currentModelId)
       ? this.#models
       : [{ id: currentModelId, label: currentModelId }, ...this.#models];
+  }
+
+  #defaultModelId(): string {
+    return this.#models[0]?.id ?? DEFAULT_MODEL_ID;
   }
 
   #uiConfigOptions(options: DshSessionConfigOption[], currentModelId: string): DshSessionConfigOption[] {
@@ -1489,6 +1493,7 @@ export class DshApiServer {
   }
 
   #assistantDetailRecord(): Record<string, unknown> {
+    const defaultModelId = this.#defaultModelId();
     return {
       id: ASSISTANT_ID,
       source: 'generated',
@@ -1511,7 +1516,7 @@ export class DshApiServer {
       rules: { content: '', storage_mode: 'backend' },
       prompts: { recommended: [], recommended_i18n: {} },
       defaults: {
-        model: { mode: 'fixed', value: DEFAULT_MODEL_ID },
+        model: { mode: 'fixed', value: defaultModelId },
         permission: { mode: 'auto' },
         thought_level: { mode: 'auto' },
         skills: { mode: 'fixed', value: [] },
@@ -1523,7 +1528,7 @@ export class DshApiServer {
         default_disabled_builtin_skill_ids: [],
       },
       preferences: {
-        last_model_id: DEFAULT_MODEL_ID,
+        last_model_id: defaultModelId,
         last_skill_ids: [],
         last_disabled_builtin_skill_ids: [],
         last_mcp_ids: [],
@@ -1532,7 +1537,8 @@ export class DshApiServer {
   }
 
   #agentRecord(): Record<string, unknown> {
-    const configOptions = this.#uiConfigOptions([], DEFAULT_MODEL_ID);
+    const defaultModelId = this.#defaultModelId();
+    const configOptions = this.#uiConfigOptions([], defaultModelId);
     return {
       id: ASSISTANT_ID,
       name: 'DeepSeek Harness',
@@ -1544,9 +1550,9 @@ export class DshApiServer {
       status: 'online',
       config_options: { config_options: configOptions },
       available_models: {
-        current_model_id: DEFAULT_MODEL_ID,
-        current_model_label: DEFAULT_MODEL_ID,
-        available_models: this.#modelOptions(DEFAULT_MODEL_ID),
+        current_model_id: defaultModelId,
+        current_model_label: defaultModelId,
+        available_models: this.#modelOptions(),
       },
       available_modes: { current_mode_id: 'default', available_modes: [] },
     };

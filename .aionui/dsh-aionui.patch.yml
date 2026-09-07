@@ -1,24 +1,14 @@
 - id: llm-deepseek
-  disabled: true
-
-- id: llm-pi-ai
   config:
-    providers:
-      aionui-deepseek:
-        displayName: DeepSeek (.env configured)
-        apiKeyEnv: DEEPSEEK_API_KEY
-        api: openai-completions
-        baseURL: !!js process.env.DEEPSEEK_URL
-        compat:
-          thinkingFormat: deepseek
-          supportsDeveloperRole: false
-        models: !!js >-
-          JSON.parse(process.env.AIONUI_DEEPSEEK_MODELS_JSON || '["deepseek-ai/DeepSeek-V4-Flash"]')
-          .map((id) => ({ id, name: id, contextWindow: 65536, maxTokens: 8192 }))
+    apiKeyEnv: DEEPSEEK_API_KEY
+    baseURL: !!js process.env.DEEPSEEK_URL || process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com'
+    models: !!js >-
+      JSON.parse(process.env.AIONUI_DEEPSEEK_MODELS_JSON || '["deepseek-v4-flash"]')
+      .map((id) => ({ id, name: id, contextWindow: 65536, maxTokens: 8192 }))
 - id: acp
   config:
-    provider: aionui-deepseek
-    model: deepseek-ai/DeepSeek-V4-Flash
+    provider: deepseek-official
+    model: !!js JSON.parse(process.env.AIONUI_DEEPSEEK_MODELS_JSON || '["deepseek-v4-flash"]')[0] || 'deepseek-v4-flash'
 
 - id: web-search-deepseek
   config:

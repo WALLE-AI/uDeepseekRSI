@@ -1,7 +1,7 @@
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { createServer as createHttpServer } from 'node:http';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve as resolvePath } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
 import { DshApiServer } from '../../../packages/dsh-bridge/src';
@@ -82,6 +82,47 @@ async function createServer(env?: NodeJS.ProcessEnv, officePreviewPort?: OfficeP
 }
 
 describe('direct DeepSeek Harness HTTP backend', () => {
+  it('starts a first-run session without a custom DeepSeek gateway', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-first-run-'));
+    const env = { ...process.env };
+    delete env.DEEPSEEK_API_KEY;
+    delete env.DEEPSEEK_BASE_URL;
+    delete env.DEEPSEEK_URL;
+    const server = new DshApiServer({
+      cwd: root,
+      dshHome: join(root, 'dsh'),
+      dataFile: join(root, 'state.json'),
+      patchPaths: [resolvePath('.aionui/dsh-aionui.patch.yml')],
+      env,
+    });
+    cleanups.push(async () => {
+      await server.stop();
+      await rm(root, { recursive: true, force: true });
+    });
+
+    const serverPort = await server.start();
+    const createResponse = await fetch(`http://127.0.0.1:${serverPort}/api/conversations`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ extra: { workspace: root } }),
+    });
+    const created = (await createResponse.json()) as { data: { id: string } };
+    const ensureResponse = await fetch(
+      `http://127.0.0.1:${serverPort}/api/conversations/${created.data.id}/runtime/ensure`,
+      { method: 'POST' }
+    );
+
+    expect(ensureResponse.status).toBe(200);
+    const ensured = (await ensureResponse.json()) as {
+      success: boolean;
+      data: { config_options: Array<{ id: string; current_value: string }> };
+    };
+    expect(ensured.success).toBe(true);
+    expect(ensured.data.config_options.find((option) => option.id === 'model')?.current_value).toBe(
+      'deepseek-v4-flash'
+    );
+  }, 30_000);
+
   it('loads pure model ids from /v1/models and only encodes the provider when setting dsh config', async () => {
     let authorization = '';
     const modelsServer = createHttpServer((request, response) => {
@@ -105,10 +146,14 @@ describe('direct DeepSeek Harness HTTP backend', () => {
     });
     const agents = (await (await fetch(`${baseUrl}/api/agents`)).json()) as {
       data: Array<{
-        available_models: { available_models: Array<{ id: string; label: string }> };
+        available_models: {
+          current_model_id: string;
+          available_models: Array<{ id: string; label: string }>;
+        };
       }>;
     };
     expect(authorization).toBe('Bearer model-api-key');
+    expect(agents.data[0].available_models.current_model_id).toBe('deepseek-ai/DeepSeek-V4-Flash');
     expect(agents.data[0].available_models.available_models).toEqual([
       { id: 'deepseek-ai/DeepSeek-V4-Flash', label: 'deepseek-ai/DeepSeek-V4-Flash' },
       { id: 'deepseek-ai/DeepSeek-V4-Pro', label: 'deepseek-ai/DeepSeek-V4-Pro' },
@@ -142,7 +187,7 @@ describe('direct DeepSeek Harness HTTP backend', () => {
         body: JSON.stringify({ value: 'deepseek-ai/DeepSeek-V4-Pro' }),
       })
     ).json()) as { data: { confirmation: string; config_options: Array<{ id: string; current_value: string }> } };
-    expect(setConfigCalls.at(-1)?.value).toBe('["aionui-deepseek","deepseek-ai/DeepSeek-V4-Pro"]');
+    expect(setConfigCalls.at(-1)?.value).toBe('["deepseek-official","deepseek-ai/DeepSeek-V4-Pro"]');
     expect(switched.data.confirmation).toBe('observed');
     expect(switched.data.config_options.find((option) => option.id === 'model')?.current_value).toBe(
       'deepseek-ai/DeepSeek-V4-Pro'
