@@ -121,6 +121,25 @@ childProcess.execSync = function mockedExecSync(command) {
     );
   });
 
+  it('verifies the branded executable after Windows installer extraction', () => {
+    const observability = readFileSync(resolve(repoRoot, 'resources/windows/installer-observability.nsh'), 'utf8');
+    const updateVerify = readFileSync(resolve(repoRoot, 'resources/windows/installer-update-verify.nsh'), 'utf8');
+
+    expect(observability).toContain('!define AIONUI_APP_EXECUTABLE_FILENAME "uworker.exe"');
+    expect(observability).toContain('$INSTDIR\\${AIONUI_APP_EXECUTABLE_FILENAME}');
+    expect(updateVerify).toContain('$INSTDIR\\${AIONUI_APP_EXECUTABLE_FILENAME}');
+    expect(observability).not.toContain('$INSTDIR\\AionUi.exe');
+    expect(updateVerify).not.toContain('$INSTDIR\\AionUi.exe');
+  });
+
+  it('does not require the legacy bundled AionCore during installation', () => {
+    const updateVerify = readFileSync(resolve(repoRoot, 'resources/windows/installer-update-verify.nsh'), 'utf8');
+    const customInstall = updateVerify.match(/!macro customInstall([\s\S]*?)!macroend/)?.[1];
+
+    expect(customInstall).toBeTruthy();
+    expect(customInstall).not.toContain('AIONUI_VERIFY_BUNDLED_AIONCORE_RESOURCES');
+  });
+
   it('uses install-directory ownership checks in the shared Windows NSIS include', () => {
     const script = readFileSync(resolve(repoRoot, 'resources/windows/installer-process-control.nsh'), 'utf8');
 
@@ -144,7 +163,7 @@ childProcess.execSync = function mockedExecSync(command) {
     expect(queryScript).toContain("'installer-self-lock'");
     expect(queryScript).toContain('outerInstallerPid');
     expect(queryScript).toContain('currentOutDir');
-    expect(queryScript).toContain("name = 'AionUi installer'");
+    expect(queryScript).toContain("name = 'uworker installer'");
   });
 
   it('continues with the bundled uninstaller when installed-uninstaller repair remains locked', () => {

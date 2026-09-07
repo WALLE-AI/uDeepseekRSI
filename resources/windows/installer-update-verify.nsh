@@ -170,7 +170,7 @@ Var /GLOBAL AionUiActiveMarkerResult
 
 !macro AIONUI_VERIFY_CORE_APP_FILES
   !insertmacro AIONUI_LOG_EVENT "verify-install start instDir=$INSTDIR"
-  !insertmacro AIONUI_VERIFY_REQUIRED_FILE "$INSTDIR\AionUi.exe" "AionUi.exe"
+  !insertmacro AIONUI_VERIFY_REQUIRED_FILE "$INSTDIR\${AIONUI_APP_EXECUTABLE_FILENAME}" "${AIONUI_APP_EXECUTABLE_FILENAME}"
   !insertmacro AIONUI_VERIFY_REQUIRED_FILE "$INSTDIR\ffmpeg.dll" "ffmpeg.dll"
   !insertmacro AIONUI_VERIFY_REQUIRED_FILE "$INSTDIR\libEGL.dll" "libEGL.dll"
   !insertmacro AIONUI_VERIFY_REQUIRED_FILE "$INSTDIR\libGLESv2.dll" "libGLESv2.dll"
@@ -203,7 +203,6 @@ Var /GLOBAL AionUiActiveMarkerResult
 
 !macro customInstall
   !insertmacro AIONUI_VERIFY_CORE_APP_FILES
-  !insertmacro AIONUI_VERIFY_BUNDLED_AIONCORE_RESOURCES "${AIONUI_RUNTIME_KEY}"
   !insertmacro AIONUI_LOG_EVENT "verify-install ok instDir=$INSTDIR"
   !insertmacro AIONUI_CLEAR_ACTIVE_INSTALLER_MARKER
   !insertmacro AIONUI_SESSION_SUCCESS
