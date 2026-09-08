@@ -164,8 +164,8 @@ type WorkspacePreviewMetadata = {
 当实时预览 Browser 标签成为活动标签时，现有 `BrowserViewer` 会传递：
 
 ```tsx
-agentBrowserControl
-agentBrowserControlActive={active}
+agentBrowserControl;
+agentBrowserControlActive = { active };
 ```
 
 CDP 桥会继续选择该 webview。因而无需修改 `aionui-browser` 的认证、端口发现或目标选择协议。MCP 可以直接执行导航、DOM 查询、点击、控制台检查和截图。
