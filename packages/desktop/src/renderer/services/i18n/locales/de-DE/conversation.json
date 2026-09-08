@@ -645,6 +645,7 @@
       "rename": "Umbenennen",
       "addToChat": "Zum Chat hinzufügen",
       "copyRelativePath": "Relativen Pfad kopieren",
+      "livePreview": "Live-Vorschau",
       "copyAbsolutePath": "Absoluten Pfad kopieren",
       "newFile": "Neue Datei",
       "newDir": "Neuer Ordner"
@@ -658,6 +659,9 @@
       "files": "Dateien",
       "changes": "Änderungen"
     },
+    "livePreviewFailed": "Live-Vorschau konnte nicht gestartet werden",
+    "confirmDevServer": "Dieses Projekt benötigt einen Entwicklungsserver. {{command}} ausführen? Es werden keine Abhängigkeiten installiert.",
+    "previewDependenciesMissing": "Projektabhängigkeiten fehlen. Installieren Sie sie im Projektverzeichnis und versuchen Sie es erneut.",
     "addedToChat": "{{name}} zum Chat hinzugefügt",
     "imported": "{{count}} Datei(en) importiert",
     "importPartialFailed": "{{copied}} kopiert, {{failed}} fehlgeschlagen (Namenskonflikte oder nicht unterstützt)",

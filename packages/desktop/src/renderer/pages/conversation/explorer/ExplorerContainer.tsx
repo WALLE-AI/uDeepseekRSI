@@ -23,6 +23,7 @@ import { useTranslation } from 'react-i18next';
 import useSWR from 'swr';
 
 import { dispatchWorkspaceHasFilesEvent } from '@/renderer/utils/workspace/workspaceEvents';
+import { isElectronDesktop } from '@/renderer/utils/platform';
 
 import { ipcBridge } from '@/common';
 import { isBackendHttpError } from '@/common/adapter/httpBridge';
@@ -104,6 +105,11 @@ const nameDialogErrorKey = (mode: NameDialogState['mode']): string =>
       ? 'conversation.explorer.newFileFailed'
       : 'conversation.explorer.newDirFailed';
 
+const workspacePreviewErrorKey = (error: unknown): string =>
+  isBackendHttpError(error) && error.code === 'WORKSPACE_PREVIEW_DEPENDENCIES_MISSING'
+    ? 'conversation.explorer.previewDependenciesMissing'
+    : 'conversation.explorer.livePreviewFailed';
+
 /** Args passed to `openPreview` for an Explorer-opened file. */
 export type ExplorerPreviewPayload = {
   content: string;
@@ -124,6 +130,12 @@ export type ExplorerPreviewPayload = {
     lastModified?: number;
   };
 };
+
+const workspaceProjectFileRef = (pe_id: string, relative_path: string) => ({
+  kind: 'project' as const,
+  pe_id,
+  relative_path,
+});
 
 // The Explorer tree knows `{pe_id, relative_path}`, mapped straight to a Project
 // ChatFileRef. Reading goes through the shared `resolvePreviewPayload` gate, so
@@ -175,7 +187,7 @@ export const buildExplorerPreviewPayload = async (
 
 export const ExplorerContainer: React.FC<ExplorerContainerProps> = ({ projectId }) => {
   const { t } = useTranslation();
-  const { openPreview } = usePreviewContext();
+  const { openPreview, openWorkspacePreview } = usePreviewContext();
   const activeConversationId = useCurrentConversation();
   const { data, isLoading, mutate } = useSWR(projectId ? `explorer-project/${projectId}` : null, (key: string) => {
     // Derive the project id from the SWR key, not the captured `projectId`
@@ -207,10 +219,46 @@ export const ExplorerContainer: React.FC<ExplorerContainerProps> = ({ projectId 
   // can stay open at once.
   const handleOpenFile = async (peId: string, relativePath: string): Promise<void> => {
     try {
+      if (isElectronDesktop() && relativePath.toLocaleLowerCase().endsWith('.html')) {
+        await openWorkspacePreview(workspaceProjectFileRef(peId, relativePath));
+        return;
+      }
       const { content, contentType, metadata } = await buildExplorerPreviewPayload(peId, relativePath);
       openPreview(content, contentType, metadata);
     } catch (e) {
       Message.error(t(previewErrorToI18nKey(classifyPreviewError(e))));
+    }
+  };
+
+  const handleLivePreview = async (peId: string, relativePath: string, isFile: boolean): Promise<void> => {
+    const rootPath = isFile ? parentRel(relativePath) : relativePath;
+    const entryPath = isFile ? relativePath : joinRel(relativePath, 'index.html');
+    const entry = workspaceProjectFileRef(peId, entryPath);
+    const root = workspaceProjectFileRef(peId, rootPath);
+    try {
+      const inspection = await ipcBridge.workspacePreview.inspect.invoke({ root });
+      if (inspection.kind === 'static') {
+        await openWorkspacePreview(entry, root);
+        return;
+      }
+      Modal.confirm({
+        title: t('conversation.explorer.contextMenu.livePreview'),
+        content: t('conversation.explorer.confirmDevServer', { command: inspection.command }),
+        okText: t('common.confirm'),
+        cancelText: t('common.cancel'),
+        onOk: async () => {
+          try {
+            await openWorkspacePreview(entry, root, {
+              mode: 'vite',
+              confirmationToken: inspection.confirmation_token,
+            });
+          } catch (error) {
+            Message.error(t(workspacePreviewErrorKey(error)));
+          }
+        },
+      });
+    } catch (error) {
+      Message.error(t(workspacePreviewErrorKey(error)));
     }
   };
 
@@ -634,6 +682,7 @@ export const ExplorerContainer: React.FC<ExplorerContainerProps> = ({ projectId 
             onNewFile={handleNewFile}
             onNewDir={handleNewDir}
             onAddToChat={activeConversationId ? handleAddToChat : undefined}
+            onLivePreview={handleLivePreview}
             onRevealInFolder={handleRevealInFolder}
             onCopyRelativePath={handleCopyRelativePath}
             onCopyAbsolutePath={handleCopyAbsolutePath}

@@ -37,6 +37,8 @@ import {
   projectDto,
   resolveProjectPath,
   sameCanonicalPath,
+  WorkspacePreviewError,
+  WorkspacePreviewService,
   type StoredProject,
   type WorkspaceBinding,
 } from './workspaceService';
@@ -257,6 +259,7 @@ export class DshApiServer {
   readonly #activeTurns = new Map<string, ActiveTurn>();
   readonly #pendingPermissions = new Map<string, PendingPermission>();
   readonly #fsWatchers = new Map<WebSocket, Map<string, FSWatcher>>();
+  readonly #workspacePreview: WorkspacePreviewService;
   #state: PersistedState = {
     conversations: [],
     messages: {},
@@ -282,6 +285,7 @@ export class DshApiServer {
         env: options.env,
         emitStatus: (documentType, status) => this.#emit(`${documentType}-preview.status`, status),
       });
+    this.#workspacePreview = new WorkspacePreviewService((event) => this.#emit('workspace-preview.changed', event));
   }
 
   get port(): number {
@@ -352,6 +356,7 @@ export class DshApiServer {
     for (const client of this.#clients) client.close();
     for (const client of this.#fsWatchers.keys()) this.#closeFsWatchers(client);
     this.#clients.clear();
+    this.#workspacePreview.dispose();
     await new Promise<void>((resolve) => this.#server?.close(() => resolve()) ?? resolve());
     this.#wsServer?.close();
     this.#server = null;
@@ -870,6 +875,62 @@ export class DshApiServer {
       const url = new URL(request.url ?? '/', 'http://localhost');
       const path = url.pathname;
       const method = request.method ?? 'GET';
+      const workspacePreviewContentMatch = path.match(/^\/api\/workspace-preview\/content\/([^/]+)(?:\/(.*))?$/);
+      if (workspacePreviewContentMatch) {
+        if (method !== 'GET' && method !== 'HEAD') {
+          responseData(response, { error: 'Method not allowed.', code: 'METHOD_NOT_ALLOWED' }, 405);
+          return;
+        }
+        try {
+          const resource = await this.#workspacePreview.read(
+            workspacePreviewContentMatch[1],
+            workspacePreviewContentMatch[2] ?? '',
+            request.headers.accept
+          );
+          response.writeHead(200, { ...resource.headers, 'Content-Length': String(resource.body.byteLength) });
+          response.end(method === 'HEAD' ? undefined : resource.body);
+        } catch (error) {
+          if (error instanceof WorkspacePreviewError) {
+            responseData(response, { error: error.code, code: error.code }, error.status);
+          } else {
+            responseData(response, { error: 'Preview failed.', code: 'WORKSPACE_PREVIEW_FAILED' }, 500);
+          }
+        }
+        return;
+      }
+      if (path === '/api/workspace-preview/start' && method === 'POST') {
+        const body = await readJsonBody(request);
+        const entry = projectFileRef(body.entry);
+        const root = body.root === undefined ? undefined : projectFileRef(body.root);
+        const mode: 'static' | 'vite' | undefined =
+          body.mode === 'static' || body.mode === 'vite' ? body.mode : undefined;
+        if (body.mode !== undefined && mode === undefined)
+          throw new WorkspacePreviewError('WORKSPACE_PREVIEW_MODE_INVALID', 400);
+        if (body.confirmation_token !== undefined && typeof body.confirmation_token !== 'string') {
+          throw new WorkspacePreviewError('WORKSPACE_PREVIEW_CONFIRMATION_INVALID', 400);
+        }
+        const confirmationToken: string | undefined =
+          typeof body.confirmation_token === 'string' ? body.confirmation_token : undefined;
+        responseData(
+          response,
+          await this.#workspacePreview.start(this.#state.projects, entry, root, `http://127.0.0.1:${this.#port}`, {
+            mode,
+            confirmationToken,
+          })
+        );
+        return;
+      }
+      if (path === '/api/workspace-preview/inspect' && method === 'POST') {
+        const body = await readJsonBody(request);
+        responseData(response, await this.#workspacePreview.inspect(this.#state.projects, projectFileRef(body.root)));
+        return;
+      }
+      const workspacePreviewStopMatch = path.match(/^\/api\/workspace-preview\/([^/]+)$/);
+      if (workspacePreviewStopMatch && method === 'DELETE') {
+        this.#workspacePreview.stop(workspacePreviewStopMatch[1]);
+        responseData(response, null);
+        return;
+      }
       if (path === '/health') {
         responseData(response, { status: 'ok', backend: 'deepseek-harness', version: 'direct' });
         return;
@@ -1510,6 +1571,10 @@ export class DshApiServer {
     } catch (error) {
       if (error instanceof OfficePreviewError) {
         responseData(response, { error: error.message, code: error.code }, 500);
+        return;
+      }
+      if (error instanceof WorkspacePreviewError) {
+        responseData(response, { error: error.code, code: error.code }, error.status);
         return;
       }
       if (error instanceof Error && error.message === 'PATH_OUTSIDE_SANDBOX') {

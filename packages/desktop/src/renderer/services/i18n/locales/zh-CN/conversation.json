@@ -644,6 +644,7 @@
       "rename": "重命名",
       "addToChat": "添加到聊天",
       "copyRelativePath": "复制相对路径",
+      "livePreview": "实时预览",
       "copyAbsolutePath": "复制绝对路径",
       "newFile": "新建文件",
       "newDir": "新建目录"
@@ -657,6 +658,9 @@
       "files": "文件",
       "changes": "变更"
     },
+    "livePreviewFailed": "无法启动实时预览",
+    "confirmDevServer": "该项目需要运行开发服务器。是否执行 {{command}}？不会自动安装依赖。",
+    "previewDependenciesMissing": "项目依赖尚未安装，请在项目目录中安装后重试。",
     "addedToChat": "已将 {{name}} 添加到聊天",
     "imported": "已导入 {{count}} 个文件",
     "importPartialFailed": "已复制 {{copied}} 个，{{failed}} 个失败（重名或不支持）",

@@ -645,6 +645,7 @@
       "rename": "Cambiar nombre",
       "addToChat": "Añadir al chat",
       "copyRelativePath": "Copiar ruta relativa",
+      "livePreview": "Vista previa en vivo",
       "copyAbsolutePath": "Copiar ruta absoluta",
       "newFile": "Nuevo archivo",
       "newDir": "Nueva carpeta"
@@ -658,6 +659,9 @@
       "files": "Archivos",
       "changes": "Cambios"
     },
+    "livePreviewFailed": "No se pudo iniciar la vista previa en vivo",
+    "confirmDevServer": "Este proyecto necesita un servidor de desarrollo. ¿Ejecutar {{command}}? No se instalarán dependencias.",
+    "previewDependenciesMissing": "Faltan las dependencias del proyecto. Instálalas en el directorio del proyecto e inténtalo de nuevo.",
     "addedToChat": "Se añadió {{name}} al chat",
     "imported": "{{count}} archivo(s) importado(s)",
     "importPartialFailed": "{{copied}} copiado(s), {{failed}} con error (conflictos de nombre o no admitidos)",

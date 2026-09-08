@@ -646,6 +646,7 @@
       "newDir": "New folder",
       "addToChat": "Add to chat",
       "copyRelativePath": "Copy relative path",
+      "livePreview": "Live preview",
       "copyAbsolutePath": "Copy absolute path"
     },
     "namePlaceholder": "Name",
@@ -657,6 +658,9 @@
       "files": "Files",
       "changes": "Changes"
     },
+    "livePreviewFailed": "Failed to start live preview",
+    "confirmDevServer": "This project needs a development server. Run {{command}}? No dependencies will be installed.",
+    "previewDependenciesMissing": "Project dependencies are missing. Install them in the project directory and try again.",
     "addedToChat": "Added {{name}} to chat",
     "imported": "Imported {{count}} file(s)",
     "importPartialFailed": "{{copied}} copied, {{failed}} failed (name conflicts or unsupported)",

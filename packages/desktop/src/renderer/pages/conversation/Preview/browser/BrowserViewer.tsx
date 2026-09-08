@@ -20,6 +20,8 @@ export interface BrowserViewerProps {
   tabId: string;
   /** Whether this tab is currently visible and should receive agent commands. */
   active: boolean;
+  /** Changes when a workspace file update should reload this tab. */
+  reloadKey?: number;
   /** 地址变化时回写 tab（用于持久化）/ Persist the new address back onto the tab */
   onUrlChange: (tabId: string, url: string) => void;
   /** 页面标题变化时回写 tab / Persist the page title back onto the tab */
@@ -45,6 +47,7 @@ const BrowserViewer: React.FC<BrowserViewerProps> = ({
   url,
   tabId,
   active,
+  reloadKey,
   onUrlChange,
   onTitleChange,
   onFaviconChange,
@@ -87,6 +90,7 @@ const BrowserViewer: React.FC<BrowserViewerProps> = ({
       onTitleChange={handleTitleChange}
       onFaviconChange={handleFaviconChange}
       onDidFinishLoad={handleDidFinishLoad}
+      reloadKey={reloadKey}
     />
   );
 };

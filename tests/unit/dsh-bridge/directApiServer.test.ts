@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { createServer as createHttpServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join, resolve as resolvePath } from 'node:path';
@@ -463,6 +463,188 @@ describe('direct DeepSeek Harness HTTP backend', () => {
         entries: expect.arrayContaining([{ name: 'hello.txt', kind: 'file' }]),
       },
     ]);
+  });
+
+  it('serves a multi-file workspace preview and invalidates its URL when stopped', async () => {
+    const { baseUrl, root } = await createServer();
+    await mkdir(join(root, 'site'));
+    await writeFile(
+      join(root, 'site', 'index.html'),
+      '<!doctype html><link rel="stylesheet" href="style.css"><main>preview ready</main>',
+      'utf8'
+    );
+    await writeFile(join(root, 'site', 'style.css'), 'main { color: red; }', 'utf8');
+    await writeFile(join(root, 'site', '.env'), 'SECRET=hidden', 'utf8');
+    const created = (await (
+      await fetch(`${baseUrl}/api/conversations`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ extra: { workspace: root } }),
+      })
+    ).json()) as { data: { project_id: string } };
+    const project = (await (await fetch(`${baseUrl}/api/projects/${created.data.project_id}`)).json()) as {
+      data: { explorer: { workspace_pe_id: string } };
+    };
+    const peId = project.data.explorer.workspace_pe_id;
+    const started = await fetch(`${baseUrl}/api/workspace-preview/start`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        entry: { kind: 'project', pe_id: peId, relative_path: 'site/index.html' },
+      }),
+    });
+    const preview = (await started.json()) as { data: { session_id: string; url: string } };
+
+    const html = await fetch(preview.data.url);
+    expect(html.status).toBe(200);
+    expect(html.headers.get('content-type')).toBe('text/html; charset=utf-8');
+    expect(await html.text()).toContain('preview ready');
+
+    const stylesheet = await fetch(new URL('style.css', preview.data.url));
+    expect(stylesheet.headers.get('content-type')).toBe('text/css; charset=utf-8');
+    expect(stylesheet.headers.get('referrer-policy')).toBe('no-referrer');
+    expect(await stylesheet.text()).toContain('color: red');
+
+    const head = await fetch(preview.data.url, { method: 'HEAD' });
+    expect(head.status).toBe(200);
+    expect(await head.text()).toBe('');
+
+    const routeFallback = await fetch(new URL('game/level/1', preview.data.url), {
+      headers: { Accept: 'text/html' },
+    });
+    expect(routeFallback.status).toBe(200);
+    expect(await routeFallback.text()).toContain('preview ready');
+
+    const secret = await fetch(new URL('.env', preview.data.url));
+    expect(secret.status).toBe(403);
+    await fetch(`${baseUrl}/api/workspace-preview/${preview.data.session_id}`, { method: 'DELETE' });
+    expect((await fetch(preview.data.url)).status).toBe(404);
+  });
+
+  it('emits one debounced refresh event when workspace preview files change', async () => {
+    const { baseUrl, root, serverPort } = await createServer();
+    await writeFile(join(root, 'index.html'), '<!doctype html><main>one</main>', 'utf8');
+    const created = (await (
+      await fetch(`${baseUrl}/api/conversations`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ extra: { workspace: root } }),
+      })
+    ).json()) as { data: { project_id: string } };
+    const project = (await (await fetch(`${baseUrl}/api/projects/${created.data.project_id}`)).json()) as {
+      data: { explorer: { workspace_pe_id: string } };
+    };
+    const started = await fetch(`${baseUrl}/api/workspace-preview/start`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        entry: {
+          kind: 'project',
+          pe_id: project.data.explorer.workspace_pe_id,
+          relative_path: 'index.html',
+        },
+      }),
+    });
+    const preview = (await started.json()) as { data: { session_id: string } };
+    const socket = new WebSocket(`ws://127.0.0.1:${serverPort}/ws`);
+    await new Promise<void>((resolve, reject) => {
+      socket.once('open', () => resolve());
+      socket.once('error', reject);
+    });
+
+    const changed = new Promise<{ session_id: string; changed_paths: string[] }>((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error('workspace preview change event timed out')), 3_000);
+      socket.on('message', (raw) => {
+        const frame = JSON.parse(raw.toString()) as { name?: string; data?: unknown };
+        if (frame.name !== 'workspace-preview.changed') return;
+        clearTimeout(timeout);
+        resolve(frame.data as { session_id: string; changed_paths: string[] });
+      });
+    });
+    await writeFile(join(root, 'index.html'), '<!doctype html><main>two</main>', 'utf8');
+    const event = await changed;
+    socket.close();
+
+    expect(event.session_id).toBe(preview.data.session_id);
+    expect(event.changed_paths).toContain('index.html');
+  });
+
+  it('detects Vite but requires an explicit confirmation token before starting it', async () => {
+    const { baseUrl, root } = await createServer();
+    await mkdir(join(root, 'node_modules', 'vite'), { recursive: true });
+    await writeFile(join(root, 'index.html'), '<!doctype html><main>vite</main>', 'utf8');
+    await writeFile(
+      join(root, 'dev-server.cjs'),
+      "const http=require('node:http');const i=process.argv.indexOf('--port');const port=Number(process.argv[i+1]);http.createServer((_q,r)=>r.end('vite ready')).listen(port,'127.0.0.1');",
+      'utf8'
+    );
+    await writeFile(
+      join(root, 'package.json'),
+      JSON.stringify({ scripts: { dev: 'node dev-server.cjs' }, devDependencies: { vite: '^6.0.0' } }),
+      'utf8'
+    );
+    const created = (await (
+      await fetch(`${baseUrl}/api/conversations`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ extra: { workspace: root } }),
+      })
+    ).json()) as { data: { project_id: string } };
+    const project = (await (await fetch(`${baseUrl}/api/projects/${created.data.project_id}`)).json()) as {
+      data: { explorer: { workspace_pe_id: string } };
+    };
+    const peId = project.data.explorer.workspace_pe_id;
+    const inspectionResponse = await fetch(`${baseUrl}/api/workspace-preview/inspect`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ root: { kind: 'project', pe_id: peId, relative_path: '' } }),
+    });
+    const inspection = (await inspectionResponse.json()) as {
+      data: { kind: string; command: string; confirmation_token: string };
+    };
+    expect(inspection.data.kind).toBe('vite');
+    expect(inspection.data.command).toContain('--host 127.0.0.1');
+
+    const unconfirmed = await fetch(`${baseUrl}/api/workspace-preview/start`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        entry: { kind: 'project', pe_id: peId, relative_path: 'index.html' },
+        root: { kind: 'project', pe_id: peId, relative_path: '' },
+        mode: 'vite',
+      }),
+    });
+    expect(unconfirmed.status).toBe(403);
+    expect(await unconfirmed.json()).toMatchObject({ code: 'WORKSPACE_PREVIEW_CONFIRMATION_REQUIRED' });
+
+    const confirmed = await fetch(`${baseUrl}/api/workspace-preview/start`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        entry: { kind: 'project', pe_id: peId, relative_path: 'index.html' },
+        root: { kind: 'project', pe_id: peId, relative_path: '' },
+        mode: 'vite',
+        confirmation_token: inspection.data.confirmation_token,
+      }),
+    });
+    expect(confirmed.status).toBe(200);
+    const session = (await confirmed.json()) as { data: { session_id: string; url: string } };
+    expect(await (await fetch(session.data.url)).text()).toBe('vite ready');
+    await fetch(`${baseUrl}/api/workspace-preview/${session.data.session_id}`, { method: 'DELETE' });
+
+    await expect
+      .poll(
+        async () => {
+          try {
+            await fetch(session.data.url, { signal: AbortSignal.timeout(200) });
+            return false;
+          } catch {
+            return true;
+          }
+        },
+        { timeout: 5_000 }
+      )
+      .toBe(true);
   });
 
   it('starts and stops OfficeCLI previews using the canonical project file path', async () => {

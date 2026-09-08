@@ -6,7 +6,7 @@
 
 import React from 'react';
 import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react';
-import { Message } from '@arco-design/web-react';
+import { Message, Modal } from '@arco-design/web-react';
 import { SWRConfig } from 'swr';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -15,7 +15,10 @@ import type { ProjectDetailDto, ProjectEntryDto } from '@/common/types/project';
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (k: string) => k }) }));
 
 const openPreview = vi.fn();
-vi.mock('@/renderer/pages/conversation/Preview', () => ({ usePreviewContext: () => ({ openPreview }) }));
+const openWorkspacePreview = vi.fn();
+vi.mock('@/renderer/pages/conversation/Preview', () => ({
+  usePreviewContext: () => ({ openPreview, openWorkspacePreview }),
+}));
 
 const fsRead = vi.fn();
 vi.mock('@/renderer/pages/conversation/explorer/monitorTransport', () => ({
@@ -29,6 +32,7 @@ const copyText = vi.fn();
 vi.mock('@/renderer/utils/ui/clipboard', () => ({ copyText: (t: string) => copyText(t) }));
 
 const copyAbsolutePath = vi.fn<(p: { pe_id: string; relative_path: string }) => Promise<void>>();
+const inspectWorkspacePreview = vi.fn();
 
 // Controllable active conversation id for add-to-chat targeting.
 let activeConversationId: string | null = null;
@@ -44,6 +48,7 @@ vi.mock('@/renderer/pages/conversation/explorer/ExplorerPanel', () => ({
     roots,
     onRemoveRoot,
     onOpenFile,
+    onLivePreview,
     onAddToChat,
     onCopyRelativePath,
     onCopyAbsolutePath,
@@ -54,6 +59,7 @@ vi.mock('@/renderer/pages/conversation/explorer/ExplorerPanel', () => ({
     roots: Array<{ title: string }>;
     onRemoveRoot?: (id: string) => void;
     onOpenFile?: (pe: string, rel: string) => void;
+    onLivePreview?: (pe: string, rel: string, isFile: boolean) => void;
     onAddToChat?: (pe: string, rel: string, name: string, isFile: boolean) => void;
     onCopyRelativePath?: (pe: string, rel: string, name: string) => void;
     onCopyAbsolutePath?: (pe: string, rel: string) => void;
@@ -81,6 +87,9 @@ vi.mock('@/renderer/pages/conversation/explorer/ExplorerPanel', () => ({
       </button>
       <button data-testid='do-open' onClick={() => onOpenFile?.('peA', 'docs/readme.md')}>
         open
+      </button>
+      <button data-testid='do-live-preview' onClick={() => onLivePreview?.('peA', 'site', false)}>
+        live-preview
       </button>
       <button data-testid='do-add-to-chat' onClick={() => onAddToChat?.('peA', 'src/main.ts', 'main.ts', true)}>
         add
@@ -131,6 +140,7 @@ vi.mock('@/common', () => ({
       getContentMetadata: { invoke: (p: unknown) => getContentMetadata(p) },
     },
     dialog: { showOpen: { invoke: (p: unknown) => showOpen(p) } },
+    workspacePreview: { inspect: { invoke: (p: unknown) => inspectWorkspacePreview(p) } },
   },
 }));
 
@@ -168,10 +178,12 @@ beforeEach(() => {
   removeFolder.mockReset();
   showOpen.mockReset();
   openPreview.mockReset();
+  openWorkspacePreview.mockReset().mockResolvedValue(undefined);
   copyFiles.mockReset().mockResolvedValue({ copied_files: [], failed_files: [] });
   emit.mockReset();
   copyText.mockReset().mockResolvedValue(undefined);
   copyAbsolutePath.mockReset().mockResolvedValue(undefined);
+  inspectWorkspacePreview.mockReset().mockResolvedValue({ kind: 'static' });
   activeConversationId = null;
   fsRead.mockReset().mockResolvedValue({ content: 'hello', encoding: 'utf-8' });
   readContent.mockReset().mockResolvedValue('hello');
@@ -264,6 +276,48 @@ describe('ExplorerContainer attach/remove', () => {
     expect(type).toBe('markdown'); // readme.md → markdown
     // Carries the Project ref so preview I/O addresses the file by pe identity.
     expect(metadata.fileRef).toEqual({ kind: 'project', pe_id: 'peA', relative_path: 'docs/readme.md' });
+  });
+
+  it('opens a directory index through the workspace live-preview service', async () => {
+    renderIt();
+    fireEvent.click(await screen.findByTestId('do-live-preview'));
+
+    await waitFor(() =>
+      expect(openWorkspacePreview).toHaveBeenCalledWith(
+        { kind: 'project', pe_id: 'peA', relative_path: 'site/index.html' },
+        { kind: 'project', pe_id: 'peA', relative_path: 'site' }
+      )
+    );
+  });
+
+  it('asks before running a detected Vite development server', async () => {
+    inspectWorkspacePreview.mockResolvedValue({
+      kind: 'vite',
+      command: 'npm run dev -- --host 127.0.0.1 --port <port> --strictPort',
+      confirmation_token: 'confirm-token',
+    });
+    const confirm = vi.spyOn(Modal, 'confirm');
+    renderIt();
+    fireEvent.click(await screen.findByTestId('do-live-preview'));
+
+    await waitFor(() => expect(confirm).toHaveBeenCalled());
+    expect(openWorkspacePreview).not.toHaveBeenCalled();
+    const onOk = confirm.mock.calls[0][0].onOk as () => Promise<void>;
+    await onOk();
+    expect(openWorkspacePreview).toHaveBeenCalledWith(
+      { kind: 'project', pe_id: 'peA', relative_path: 'site/index.html' },
+      { kind: 'project', pe_id: 'peA', relative_path: 'site' },
+      { mode: 'vite', confirmationToken: 'confirm-token' }
+    );
+  });
+
+  it('explains when a Vite project has no installed dependencies', async () => {
+    inspectWorkspacePreview.mockRejectedValue(backendErr('WORKSPACE_PREVIEW_DEPENDENCIES_MISSING'));
+    renderIt();
+    fireEvent.click(await screen.findByTestId('do-live-preview'));
+
+    await waitFor(() => expect(Message.error).toHaveBeenCalledWith('conversation.explorer.previewDependenciesMissing'));
+    expect(openWorkspacePreview).not.toHaveBeenCalled();
   });
 
   it('removes an attached folder and revalidates the tree', async () => {

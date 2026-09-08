@@ -2,6 +2,37 @@
 
 This directory contains scripts for building and packaging AionUi across different platforms and architectures.
 
+## Start AionUi with DeepSeek
+
+Use the environment-aware launcher when running the DeepSeek Harness integration locally:
+
+```powershell
+bun run start:deepseek
+```
+
+The launcher resolves `DEEPSEEK_API_KEY` in this order:
+
+1. The current process environment
+2. The repository-root `.env` file
+3. The Windows User environment
+4. The Windows Machine environment
+
+The `.env` file is gitignored. Its minimum configuration is:
+
+```dotenv
+DEEPSEEK_API_KEY=sk-your-key-here
+```
+
+For a custom gateway, `DEEPSEEK_URL` or `DEEPSEEK_BASE_URL` may also be supplied through the launching environment. DeepSeek Harness treats endpoint variables as bootstrap settings, so prefer the Windows environment or the current PowerShell session for those variables instead of the repository `.env` file.
+
+To validate credential discovery without starting or stopping AionUi:
+
+```powershell
+node scripts/dev-bootstrap.mjs doctor --require-deepseek
+```
+
+The launcher reports only the selected source. It never prints the credential value.
+
 ## Scripts Overview
 
 | Script                    | Lines | Purpose                                         |

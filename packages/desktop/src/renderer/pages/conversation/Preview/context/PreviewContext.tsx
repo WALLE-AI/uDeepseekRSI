@@ -28,6 +28,21 @@ export interface DomSnippet {
   html: string;
 }
 
+type ProjectChatFileRef = Extract<ChatFileRef, { kind: 'project' }>;
+
+export type WorkspacePreviewMetadata = {
+  entry: ProjectChatFileRef;
+  root?: ProjectChatFileRef;
+  mode: 'static' | 'vite';
+  sessionId?: string;
+  reloadKey: number;
+};
+
+export type WorkspacePreviewOptions = {
+  mode?: 'static' | 'vite';
+  confirmationToken?: string;
+};
+
 export interface PreviewMetadata {
   language?: string;
   title?: string;
@@ -63,6 +78,7 @@ export interface PreviewMetadata {
   missingFile?: boolean; // 文件不存在或无法读取 / Whether the referenced file is missing or unreadable
   favicon?: string; // 浏览器 tab 的站点图标 URL / Site icon URL for browser tabs
   agentActive?: boolean; // Agent 正在操作该浏览器 tab / Agent is currently driving this browser tab
+  workspacePreview?: WorkspacePreviewMetadata;
 }
 
 export interface PreviewTab {
@@ -132,6 +148,12 @@ export interface PreviewContextValue {
    * Open a browser tab; blank page when url is omitted.
    */
   openBrowserTab: (url?: string) => void;
+  /** Serve a project HTML file over HTTP and open it in an agent-controllable Browser tab. */
+  openWorkspacePreview: (
+    entry: ProjectChatFileRef,
+    root?: ProjectChatFileRef,
+    options?: WorkspacePreviewOptions
+  ) => Promise<void>;
   closePreview: () => void;
   /** 切换最大化 / Toggle maximized. */
   toggleMaximized: () => void;
@@ -304,6 +326,24 @@ const tabForPersistence = (tab: PreviewTab): PreviewTab | null => {
     // Agent activity is a live, per-session signal — never restore it as active.
     metadata: tab.metadata?.agentActive ? { ...tab.metadata, agentActive: false } : tab.metadata,
   };
+
+  if (tab.content_type === 'browser' && shared.metadata?.workspacePreview) {
+    if (shared.metadata.workspacePreview.mode === 'vite') return null;
+    return {
+      ...shared,
+      content: BROWSER_BLANK_URL,
+      originalContent: BROWSER_BLANK_URL,
+      metadata: {
+        ...shared.metadata,
+        workspacePreview: {
+          ...shared.metadata.workspacePreview,
+          mode: shared.metadata.workspacePreview.mode ?? 'static',
+          sessionId: undefined,
+          reloadKey: 0,
+        },
+      },
+    };
+  }
 
   if (REFETCHABLE_CONTENT_TYPES.has(tab.content_type)) {
     // A missing `fileRef` is not rejected here. Dropping unrestorable tabs is the
@@ -546,6 +586,8 @@ export const PreviewProvider: React.FC<{ children: React.ReactNode }> = ({ child
   // twice), so decisions with observable side effects are made up front.
   const tabsRef = useRef<PreviewTab[]>([]);
   tabsRef.current = tabs;
+  const ownedWorkspacePreviewSessionsRef = useRef<Set<string>>(new Set());
+  const restoringWorkspacePreviewTabsRef = useRef<Set<string>>(new Set());
   // Set when a browser-tab open was folded into an existing tab because the cap
   // was reached, so the UI can tell the user instead of silently reusing a tab.
   const [browserTabLimitHitAt, setBrowserTabLimitHitAt] = useState<number | null>(null);
@@ -881,6 +923,35 @@ export const PreviewProvider: React.FC<{ children: React.ReactNode }> = ({ child
     [openPreview]
   );
 
+  const openWorkspacePreview = useCallback(
+    async (
+      entry: ProjectChatFileRef,
+      root?: ProjectChatFileRef,
+      options: WorkspacePreviewOptions = {}
+    ): Promise<void> => {
+      const session = await ipcBridge.workspacePreview.start.invoke({
+        entry,
+        root,
+        mode: options.mode,
+        confirmation_token: options.confirmationToken,
+      });
+      ownedWorkspacePreviewSessionsRef.current.add(session.session_id);
+      const fileName = entry.relative_path.split('/').at(-1) || 'index.html';
+      openPreview(session.url, 'browser', {
+        fileRef: entry,
+        file_name: fileName,
+        workspacePreview: {
+          entry,
+          root,
+          mode: options.mode ?? 'static',
+          sessionId: session.session_id,
+          reloadKey: 0,
+        },
+      });
+    },
+    [openPreview]
+  );
+
   /**
    * Hide the preview panel, keeping its tabs.
    *
@@ -962,13 +1033,16 @@ export const PreviewProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
   const closeTab = useCallback(
     (tabId: string) => {
-      setTabs((prevTabs) => {
-        // Clean up mtime record for the closed tab (keyed by ChatFileRef identity)
-        const tabToClose = prevTabs.find((tab) => tab.id === tabId);
-        if (tabToClose?.metadata?.fileRef) {
-          fileMtimeRef.current.delete(chatFileRefKey(tabToClose.metadata.fileRef));
-        }
+      const tabToClose = tabsRef.current.find((tab) => tab.id === tabId);
+      if (tabToClose?.metadata?.fileRef) {
+        fileMtimeRef.current.delete(chatFileRefKey(tabToClose.metadata.fileRef));
+      }
+      const previewSessionId = tabToClose?.metadata?.workspacePreview?.sessionId;
+      if (previewSessionId && ownedWorkspacePreviewSessionsRef.current.delete(previewSessionId)) {
+        void ipcBridge.workspacePreview.stop.invoke({ session_id: previewSessionId }).catch(() => {});
+      }
 
+      setTabs((prevTabs) => {
         const newTabs = prevTabs.filter((tab) => tab.id !== tabId);
 
         // 如果关闭的是当前激活的 tab / If closing the active tab
@@ -1042,6 +1116,73 @@ export const PreviewProvider: React.FC<{ children: React.ReactNode }> = ({ child
         if (patch.metadata) next.metadata = { ...tab.metadata, ...patch.metadata };
         return next;
       })
+    );
+  }, []);
+
+  useEffect(() => {
+    const liveSessionIds = new Set(
+      tabs
+        .map((tab) => tab.metadata?.workspacePreview?.sessionId)
+        .filter((sessionId): sessionId is string => Boolean(sessionId))
+    );
+    for (const sessionId of ownedWorkspacePreviewSessionsRef.current) {
+      if (liveSessionIds.has(sessionId)) continue;
+      ownedWorkspacePreviewSessionsRef.current.delete(sessionId);
+      void ipcBridge.workspacePreview.stop.invoke({ session_id: sessionId }).catch(() => {});
+    }
+  }, [tabs]);
+
+  useEffect(() => {
+    return () => {
+      for (const sessionId of ownedWorkspacePreviewSessionsRef.current) {
+        void ipcBridge.workspacePreview.stop.invoke({ session_id: sessionId }).catch(() => {});
+      }
+      ownedWorkspacePreviewSessionsRef.current.clear();
+    };
+  }, []);
+
+  useEffect(() => {
+    for (const tab of tabs) {
+      const preview = tab.metadata?.workspacePreview;
+      if (!preview || preview.sessionId || restoringWorkspacePreviewTabsRef.current.has(tab.id)) continue;
+      restoringWorkspacePreviewTabsRef.current.add(tab.id);
+      void ipcBridge.workspacePreview.start
+        .invoke({ entry: preview.entry, root: preview.root })
+        .then((session) => {
+          if (!tabsRef.current.some((candidate) => candidate.id === tab.id)) {
+            void ipcBridge.workspacePreview.stop.invoke({ session_id: session.session_id }).catch(() => {});
+            return;
+          }
+          ownedWorkspacePreviewSessionsRef.current.add(session.session_id);
+          updateTab(tab.id, {
+            content: session.url,
+            metadata: {
+              workspacePreview: { ...preview, sessionId: session.session_id, reloadKey: 0 },
+            },
+          });
+        })
+        .catch(() => closeTab(tab.id))
+        .finally(() => restoringWorkspacePreviewTabsRef.current.delete(tab.id));
+    }
+  }, [closeTab, tabs, updateTab]);
+
+  useEffect(() => {
+    return (
+      ipcBridge.workspacePreview?.changed?.on?.(({ session_id }) => {
+        setTabs((current) =>
+          current.map((tab) => {
+            const preview = tab.metadata?.workspacePreview;
+            if (preview?.sessionId !== session_id) return tab;
+            return {
+              ...tab,
+              metadata: {
+                ...tab.metadata,
+                workspacePreview: { ...preview, reloadKey: preview.reloadKey + 1 },
+              },
+            };
+          })
+        );
+      }) ?? (() => {})
     );
   }, []);
 
@@ -1371,6 +1512,7 @@ export const PreviewProvider: React.FC<{ children: React.ReactNode }> = ({ child
       updateContent,
       updateTab,
       openBrowserTab,
+      openWorkspacePreview,
       browserTabLimitHitAt,
       persistQuotaExceededAt,
       saveContent,
@@ -1402,6 +1544,7 @@ export const PreviewProvider: React.FC<{ children: React.ReactNode }> = ({ child
     updateContent,
     updateTab,
     openBrowserTab,
+    openWorkspacePreview,
     browserTabLimitHitAt,
     persistQuotaExceededAt,
     saveContent,

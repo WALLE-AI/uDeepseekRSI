@@ -644,6 +644,7 @@
       "rename": "重新命名",
       "addToChat": "加入對話",
       "copyRelativePath": "複製相對路徑",
+      "livePreview": "即時預覽",
       "copyAbsolutePath": "複製絕對路徑",
       "newFile": "新增檔案",
       "newDir": "新增資料夾"
@@ -657,6 +658,9 @@
       "files": "檔案",
       "changes": "變更"
     },
+    "livePreviewFailed": "無法啟動即時預覽",
+    "confirmDevServer": "此專案需要執行開發伺服器。是否執行 {{command}}？不會自動安裝相依套件。",
+    "previewDependenciesMissing": "專案相依套件尚未安裝，請在專案目錄中安裝後再試。",
     "addedToChat": "已將 {{name}} 加入對話",
     "imported": "已匯入 {{count}} 個檔案",
     "importPartialFailed": "已複製 {{copied}} 個，{{failed}} 個失敗（重名或不支援）",

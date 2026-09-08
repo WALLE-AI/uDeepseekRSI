@@ -39,6 +39,7 @@ import {
 import { ExplorerPanel } from '@/renderer/pages/conversation/explorer/ExplorerPanel';
 
 const REVEAL_LABEL = 'conversation.workspace.contextMenu.openLocation';
+const LIVE_PREVIEW_LABEL = 'conversation.explorer.contextMenu.livePreview';
 
 const makePort = (snapshots: Record<PeKey, Entry[]>): MonitorPort => ({
   subscribe: async (refs: DirRef[]) => ({
@@ -50,14 +51,19 @@ const makePort = (snapshots: Record<PeKey, Entry[]>): MonitorPort => ({
   unsubscribe: () => {},
 });
 
-const renderPanel = (onRevealInFolder?: (peId: string, rel: string) => void, onOpenFile: () => void = vi.fn()) => {
-  configureExplorerStore(makePort({ [peKey('pe1', '')]: [{ name: 'a.ts', kind: 'file' } as Entry] }));
+const renderPanel = (
+  onRevealInFolder?: (peId: string, rel: string) => void,
+  onOpenFile: () => void = vi.fn(),
+  options: { entries?: Entry[]; onLivePreview?: (peId: string, rel: string, isFile: boolean) => void } = {}
+) => {
+  configureExplorerStore(makePort({ [peKey('pe1', '')]: options.entries ?? [{ name: 'a.ts', kind: 'file' }] }));
   render(
     <ExplorerPanel
       projectId='p1'
       roots={[{ pe_id: 'pe1', title: 'app', role: 'workspace' }]}
       onOpenFile={onOpenFile}
       onRevealInFolder={onRevealInFolder}
+      onLivePreview={options.onLivePreview}
     />
   );
 };
@@ -94,5 +100,23 @@ describe('Explorer reveal-in-folder context menu (Electron only)', () => {
     await new Promise((r) => setTimeout(r, 20));
     expect(screen.queryByText(REVEAL_LABEL)).toBeNull();
     expect(onRevealInFolder).not.toHaveBeenCalled();
+  });
+
+  it('on Electron: offers live preview for HTML files and invokes it with the project ref', async () => {
+    const onLivePreview = vi.fn();
+    renderPanel(undefined, vi.fn(), { entries: [{ name: 'index.html', kind: 'file' }], onLivePreview });
+
+    fireEvent.contextMenu(await screen.findByText('index.html'));
+    fireEvent.click(await screen.findByText(LIVE_PREVIEW_LABEL));
+
+    expect(onLivePreview).toHaveBeenCalledWith('pe1', 'index.html', true);
+  });
+
+  it('does not offer live preview for a non-HTML file', async () => {
+    renderPanel(undefined, vi.fn(), { onLivePreview: vi.fn() });
+
+    fireEvent.contextMenu(await screen.findByText('a.ts'));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(screen.queryByText(LIVE_PREVIEW_LABEL)).toBeNull();
   });
 });

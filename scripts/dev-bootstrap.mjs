@@ -1,10 +1,19 @@
 #!/usr/bin/env node
-import { execSync, spawn } from 'node:child_process';
+import { execFileSync, execSync, spawn } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 
 const DEFAULT_PORTS = [5173, 9230];
 const KILLABLE_NAMES = new Set(['electron', 'aionui', 'aionui.exe']);
+const DEEPSEEK_API_KEY = 'DEEPSEEK_API_KEY';
+const DEEPSEEK_ENV_NAMES = [
+  DEEPSEEK_API_KEY,
+  'DEEPSEEK_URL',
+  'DEEPSEEK_BASE_URL',
+  'DEEPSEEK_SEARCH_API_KEY',
+  'DEEPSEEK_SEARCH_BASE_URL',
+];
 
 const log = (...args) => console.log('[dev-bootstrap]', ...args);
 const warn = (...args) => console.warn('[dev-bootstrap]', ...args);
@@ -15,6 +24,75 @@ function run(command) {
 
 function isWindows() {
   return process.platform === 'win32';
+}
+
+function usableEnvironmentValue(value) {
+  const normalized = value?.trim();
+  return normalized ? normalized : undefined;
+}
+
+function readWindowsEnvironmentVariable(name, scope) {
+  const script = [
+    `$value = [Environment]::GetEnvironmentVariable('${name}', '${scope}')`,
+    'if ($null -ne $value) { [Console]::Out.Write($value) }',
+  ].join('; ');
+  try {
+    return usableEnvironmentValue(
+      execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
+        encoding: 'utf8',
+        windowsHide: true,
+      })
+    );
+  } catch {
+    return undefined;
+  }
+}
+
+function loadDeepSeekEnvironment() {
+  const sources = new Map();
+  for (const name of DEEPSEEK_ENV_NAMES) {
+    const value = usableEnvironmentValue(process.env[name]);
+    if (value) {
+      process.env[name] = value;
+      sources.set(name, 'process');
+    } else {
+      delete process.env[name];
+    }
+  }
+
+  const envPath = path.resolve(process.cwd(), '.env');
+  if (existsSync(envPath)) {
+    process.loadEnvFile(envPath);
+    log(`loaded local environment from ${envPath}`);
+    for (const name of DEEPSEEK_ENV_NAMES) {
+      if (sources.has(name)) continue;
+      const value = usableEnvironmentValue(process.env[name]);
+      if (!value) continue;
+      process.env[name] = value;
+      sources.set(name, '.env');
+    }
+  }
+
+  if (isWindows()) {
+    for (const name of DEEPSEEK_ENV_NAMES) {
+      if (sources.has(name)) continue;
+      for (const scope of ['User', 'Machine']) {
+        const value = readWindowsEnvironmentVariable(name, scope);
+        if (!value) continue;
+        process.env[name] = value;
+        sources.set(name, `Windows ${scope}`);
+        break;
+      }
+    }
+  }
+
+  const keySource = sources.get(DEEPSEEK_API_KEY);
+  if (!keySource) {
+    throw new Error(
+      'DEEPSEEK_API_KEY is missing. Export it before launch, configure it in Windows User/Machine environment variables, or add it to the repository-root .env file.'
+    );
+  }
+  log(`DeepSeek credential ready (source: ${keySource}; value hidden)`);
 }
 
 function parseArgs(argv) {
@@ -150,12 +228,14 @@ function doctor() {
   }
 }
 
-function launch(scriptName, withExtensions) {
+function launch(scriptName, withExtensions, requireDeepSeek) {
   if (!scriptName) {
     throw new Error(
       'Missing script name. Usage: node scripts/dev-bootstrap.mjs launch <start|webui|cli> [--extensions]'
     );
   }
+
+  if (requireDeepSeek) loadDeepSeekEnvironment();
 
   const killedByName = cleanupByName();
   const killedByPort = cleanupPorts(DEFAULT_PORTS);
@@ -189,12 +269,13 @@ function main() {
   const { command, values, flags } = parseArgs(process.argv.slice(2));
 
   if (command === 'doctor') {
+    if (flags.has('--require-deepseek')) loadDeepSeekEnvironment();
     doctor();
     return;
   }
 
   if (command === 'launch') {
-    launch(values[0], flags.has('--extensions'));
+    launch(values[0], flags.has('--extensions'), flags.has('--require-deepseek'));
     return;
   }
 

@@ -646,6 +646,7 @@
       "rename": "Yeniden adlandır",
       "addToChat": "Sohbete ekle",
       "copyRelativePath": "Göreli yolu kopyala",
+      "livePreview": "Canlı önizleme",
       "copyAbsolutePath": "Mutlak yolu kopyala",
       "newFile": "Yeni dosya",
       "newDir": "Yeni klasör"
@@ -659,6 +660,9 @@
       "files": "Dosyalar",
       "changes": "Değişiklikler"
     },
+    "livePreviewFailed": "Canlı önizleme başlatılamadı",
+    "confirmDevServer": "Bu proje bir geliştirme sunucusu gerektiriyor. {{command}} çalıştırılsın mı? Bağımlılıklar yüklenmeyecek.",
+    "previewDependenciesMissing": "Proje bağımlılıkları eksik. Proje dizininde yükleyip tekrar deneyin.",
     "addedToChat": "{{name}} sohbete eklendi",
     "imported": "{{count}} dosya içe aktarıldı",
     "importPartialFailed": "{{copied}} kopyalandı, {{failed}} başarısız (ad çakışması veya desteklenmiyor)",

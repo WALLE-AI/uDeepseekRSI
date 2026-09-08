@@ -64,6 +64,8 @@ export type ExplorerPanelProps = {
   /** Add a file/folder node to the active conversation's send box. Omit to hide
    * the item (e.g. no single active conversation, as on the team route). */
   onAddToChat?: (peId: string, relativePath: string, name: string, isFile: boolean) => void;
+  /** Open an HTML file, or a directory's index.html, in the live Browser preview. */
+  onLivePreview?: (peId: string, relativePath: string, isFile: boolean) => void;
   /** Reveal the node in the OS file manager (Finder/Explorer). The handler
    * resolves the pe-ref to an absolute path backend-side; the item is only shown
    * on Electron desktop (WebUI has no local shell / may be remote). Omit to hide. */
@@ -99,6 +101,7 @@ export const ExplorerPanel: React.FC<ExplorerPanelProps> = ({
   onNewFile,
   onNewDir,
   onAddToChat,
+  onLivePreview,
   onRevealInFolder,
   onCopyRelativePath,
   onCopyAbsolutePath,
@@ -319,6 +322,8 @@ export const ExplorerPanel: React.FC<ExplorerPanelProps> = ({
       const showWebActions = !isElectronDesktop();
       const menuCaps: ExplorerMenuCaps = {
         addToChat: Boolean(onAddToChat),
+        livePreview:
+          isElectronDesktop() && Boolean(onLivePreview) && (!isFile || name.toLocaleLowerCase().endsWith('.html')),
         revealInFolder: canReveal,
         copyRelativePath: Boolean(onCopyRelativePath),
         copyAbsolutePath: canCopyAbsolutePath,
@@ -345,6 +350,7 @@ export const ExplorerPanel: React.FC<ExplorerPanelProps> = ({
       const onClickMenuItem = (menuKey: string, event: { stopPropagation?: () => void }) => {
         event?.stopPropagation?.();
         if (menuKey === 'addToChat') onAddToChat?.(peId, rel, name, isFile);
+        else if (menuKey === 'livePreview') onLivePreview?.(peId, rel, isFile);
         else if (menuKey === 'newFile') onNewFile?.(peId, rel);
         else if (menuKey === 'newDir') onNewDir?.(peId, rel);
         else if (menuKey === 'rename') onRename?.(peId, rel, name);
@@ -359,6 +365,8 @@ export const ExplorerPanel: React.FC<ExplorerPanelProps> = ({
         switch (key) {
           case 'addToChat':
             return <Menu.Item key='addToChat'>{t('conversation.explorer.contextMenu.addToChat')}</Menu.Item>;
+          case 'livePreview':
+            return <Menu.Item key='livePreview'>{t('conversation.explorer.contextMenu.livePreview')}</Menu.Item>;
           case 'revealInFolder':
             return <Menu.Item key='revealInFolder'>{t('conversation.workspace.contextMenu.openLocation')}</Menu.Item>;
           case 'copyRelativePath':
@@ -441,6 +449,7 @@ export const ExplorerPanel: React.FC<ExplorerPanelProps> = ({
       onNewFile,
       onNewDir,
       onAddToChat,
+      onLivePreview,
       onImportFiles,
       onTransfer,
       dragOverKey,

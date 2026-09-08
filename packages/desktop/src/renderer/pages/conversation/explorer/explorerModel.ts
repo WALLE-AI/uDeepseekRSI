@@ -556,6 +556,7 @@ export function buildTransferRequest(op: TransferOp, from: DirRef, toDir: DirRef
 /** A context-menu action key (stable; also the arco `Menu.Item` key). */
 export type ExplorerMenuItemKey =
   | 'addToChat'
+  | 'livePreview'
   | 'revealInFolder'
   | 'copyRelativePath'
   | 'copyAbsolutePath'
@@ -581,7 +582,7 @@ export type ExplorerMenuCaps = Record<ExplorerMenuItemKey, boolean>;
  */
 export function explorerContextMenuSections(caps: ExplorerMenuCaps): ExplorerMenuItemKey[][] {
   const sections: ExplorerMenuItemKey[][] = [
-    ['addToChat'],
+    ['addToChat', 'livePreview'],
     ['revealInFolder', 'copyRelativePath', 'copyAbsolutePath'],
     ['newFile', 'newDir', 'rename', 'delete', 'remove'],
   ];

@@ -73,6 +73,7 @@ const BrowserTabLayer: React.FC<BrowserTabLayerProps> = ({ browserTabs, activeTa
               url={tab.content}
               tabId={tab.id}
               active={isActive}
+              reloadKey={tab.metadata?.workspacePreview?.reloadKey}
               onUrlChange={handleUrlChange}
               onTitleChange={handleTitleChange}
               onFaviconChange={handleFaviconChange}
