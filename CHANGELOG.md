@@ -1,5 +1,22 @@
 # Changelog
 
+## [2.2.2](https://github.com/WALLE-AI/uDeepseekRSI/compare/v2.2.1...v2.2.2) (2026-09-08)
+
+### Desktop
+
+#### Features
+
+- **preview:** add live workspace rendering
+- **modes:** add separate office and coding experiences
+
+#### Bug Fixes
+
+- **dsh:** support the first-run default provider
+- **dsh:** route compatible gateways through the pi-ai adapter
+- **installer:** validate the packaged uworker executable
+
+---
+
 ## [2.2.1](https://github.com/iOfficeAI/AionUi/compare/v2.1.61...v2.2.1) (2026-09-01)
 
 ### Desktop
