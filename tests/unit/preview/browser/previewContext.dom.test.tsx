@@ -22,7 +22,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const bridgeListeners = vi.hoisted(() => ({
   openLocal: null as null | ((data: { content: string; content_type: 'browser' }) => void),
   responseStream: null as null | ((message: { type: string; data: unknown }) => void),
+  workspaceChanged: null as null | ((data: { session_id: string; changed_paths: string[] }) => void),
 }));
+
+const startWorkspacePreview = vi.hoisted(() => vi.fn());
+const stopWorkspacePreview = vi.hoisted(() => vi.fn());
 
 vi.mock('@/common', () => ({
   ipcBridge: {
@@ -45,6 +49,16 @@ vi.mock('@/common', () => ({
       },
     },
     fs: { getFileContent: { invoke: vi.fn() }, writeFile: { invoke: vi.fn() } },
+    workspacePreview: {
+      start: { invoke: startWorkspacePreview },
+      stop: { invoke: stopWorkspacePreview },
+      changed: {
+        on: (listener: NonNullable<typeof bridgeListeners.workspaceChanged>) => {
+          bridgeListeners.workspaceChanged = listener;
+          return () => (bridgeListeners.workspaceChanged = null);
+        },
+      },
+    },
   },
 }));
 
@@ -80,6 +94,12 @@ beforeEach(() => {
   localStorage.clear();
   bridgeListeners.openLocal = null;
   bridgeListeners.responseStream = null;
+  bridgeListeners.workspaceChanged = null;
+  startWorkspacePreview.mockReset().mockResolvedValue({
+    session_id: 'preview-session',
+    url: 'http://127.0.0.1:9527/api/workspace-preview/content/token/index.html',
+  });
+  stopWorkspacePreview.mockReset().mockResolvedValue(undefined);
 });
 
 describe('PreviewContext browser tabs', () => {
@@ -177,6 +197,30 @@ describe('PreviewContext browser tabs', () => {
     expect(browserTabs()).toHaveLength(1);
     expect(browserTabs()[0].metadata?.agentActive).toBe(true);
   });
+
+  it('opens, refreshes, and stops a workspace preview session', async () => {
+    renderProvider();
+    const entry = { kind: 'project' as const, pe_id: 'peA', relative_path: 'site/index.html' };
+    const root = { kind: 'project' as const, pe_id: 'peA', relative_path: 'site' };
+
+    await act(() => ctx.openWorkspacePreview(entry, root));
+
+    expect(startWorkspacePreview).toHaveBeenCalledWith({
+      entry,
+      root,
+      mode: undefined,
+      confirmation_token: undefined,
+    });
+    const tab = browserTabs()[0];
+    expect(tab.content).toContain('/api/workspace-preview/content/');
+    expect(tab.metadata?.workspacePreview).toMatchObject({ entry, root, sessionId: 'preview-session', reloadKey: 0 });
+
+    act(() => bridgeListeners.workspaceChanged?.({ session_id: 'preview-session', changed_paths: ['style.css'] }));
+    expect(browserTabs()[0].metadata?.workspacePreview?.reloadKey).toBe(1);
+
+    act(() => ctx.closeTab(tab.id));
+    expect(stopWorkspacePreview).toHaveBeenCalledWith({ session_id: 'preview-session' });
+  });
 });
 
 describe('PreviewContext browser tab persistence', () => {
@@ -205,6 +249,19 @@ describe('PreviewContext browser tab persistence', () => {
     act(() => ctx.closePreviewIfScopeChanged('project-a'));
     expect(browserTabs()).toHaveLength(1);
     expect(browserTabs()[0].content).toBe('https://example.com');
+  });
+
+  it('does not restore a Vite tab because restarting project code requires fresh confirmation', async () => {
+    renderProvider();
+    act(() => ctx.closePreviewIfScopeChanged('project-a'));
+    const entry = { kind: 'project' as const, pe_id: 'peA', relative_path: 'index.html' };
+    const root = { kind: 'project' as const, pe_id: 'peA', relative_path: '' };
+    await act(() => ctx.openWorkspacePreview(entry, root, { mode: 'vite', confirmationToken: 'confirm-token' }));
+
+    act(() => ctx.closePreviewIfScopeChanged('project-b'));
+
+    expect(readScope('project-a').tabs).toEqual([]);
+    expect(stopWorkspacePreview).toHaveBeenCalledWith({ session_id: 'preview-session' });
   });
 
   it('never restores the agent activity badge as active', () => {

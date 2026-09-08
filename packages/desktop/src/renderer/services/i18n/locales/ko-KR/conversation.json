@@ -644,6 +644,7 @@
       "rename": "이름 바꾸기",
       "addToChat": "채팅에 추가",
       "copyRelativePath": "상대 경로 복사",
+      "livePreview": "실시간 미리보기",
       "copyAbsolutePath": "절대 경로 복사",
       "newFile": "새 파일",
       "newDir": "새 폴더"
@@ -657,6 +658,9 @@
       "files": "파일",
       "changes": "변경"
     },
+    "livePreviewFailed": "실시간 미리보기를 시작하지 못했습니다",
+    "confirmDevServer": "이 프로젝트에는 개발 서버가 필요합니다. {{command}} 명령을 실행할까요? 종속성은 설치하지 않습니다.",
+    "previewDependenciesMissing": "프로젝트 종속성이 없습니다. 프로젝트 디렉터리에서 설치한 후 다시 시도하세요.",
     "addedToChat": "{{name}}을(를) 채팅에 추가했습니다",
     "imported": "{{count}}개 파일을 가져왔습니다",
     "importPartialFailed": "{{copied}}개 복사, {{failed}}개 실패(이름 충돌 또는 미지원)",

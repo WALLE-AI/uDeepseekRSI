@@ -646,6 +646,7 @@
       "rename": "Renommer",
       "addToChat": "Ajouter au chat",
       "copyRelativePath": "Copier le chemin relatif",
+      "livePreview": "Aperçu en direct",
       "copyAbsolutePath": "Copier le chemin absolu"
     },
     "namePlaceholder": "Nom",
@@ -657,6 +658,9 @@
       "files": "Fichiers",
       "changes": "Modifications"
     },
+    "livePreviewFailed": "Impossible de démarrer l’aperçu en direct",
+    "confirmDevServer": "Ce projet nécessite un serveur de développement. Exécuter {{command}} ? Aucune dépendance ne sera installée.",
+    "previewDependenciesMissing": "Les dépendances du projet sont absentes. Installez-les dans le dossier du projet, puis réessayez.",
     "addedToChat": "{{name}} ajouté au chat",
     "imported": "{{count}} fichier(s) importé(s)",
     "importPartialFailed": "{{copied}} copié(s), {{failed}} échec(s) (conflits de noms ou non pris en charge)",

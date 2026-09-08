@@ -31,6 +31,8 @@ export interface WebviewHostProps {
   onDidFinishLoad?: () => void;
   /** Called when the page fails to load */
   onDidFailLoad?: (errorCode: number, errorDescription: string) => void;
+  /** Reload the current page whenever this value changes after the first render. */
+  reloadKey?: number;
   /**
    * Called whenever the displayed URL changes (navigation, link click, address bar).
    * Lets the owner persist the current location without polling the webview.
@@ -72,6 +74,7 @@ const WebviewHost: React.FC<WebviewHostProps> = ({
   style,
   onDidFinishLoad,
   onDidFailLoad,
+  reloadKey,
   onUrlChange,
   onTitleChange,
   onFaviconChange,
@@ -83,6 +86,15 @@ const WebviewHost: React.FC<WebviewHostProps> = ({
   const webviewRef = useRef<Electron.WebviewTag | null>(null);
   const autoFitPendingRef = useRef(false);
   const reportedBrowserWebContentsIdRef = useRef<number | null>(null);
+  const previousReloadKeyRef = useRef(reloadKey);
+
+  useEffect(() => {
+    const previous = previousReloadKeyRef.current;
+    previousReloadKeyRef.current = reloadKey;
+    if (reloadKey !== undefined && previous !== undefined && reloadKey !== previous) {
+      webviewRef.current?.reload();
+    }
+  }, [reloadKey]);
 
   const reportBrowserWebContents = useCallback((): boolean => {
     if (!agentBrowserControl || !agentBrowserControlActive) return false;

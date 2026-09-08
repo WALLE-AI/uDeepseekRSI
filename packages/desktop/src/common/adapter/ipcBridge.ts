@@ -1022,6 +1022,32 @@ export const fs = {
   },
 };
 
+export type WorkspacePreviewSession = {
+  session_id: string;
+  url: string;
+};
+
+export type WorkspacePreviewInspection =
+  | { kind: 'static' }
+  | { kind: 'vite'; command: string; confirmation_token: string };
+
+export const workspacePreview = {
+  inspect: httpPost<WorkspacePreviewInspection, { root: ChatFileRef }>('/api/workspace-preview/inspect'),
+  start: httpPost<
+    WorkspacePreviewSession,
+    {
+      entry: ChatFileRef;
+      root?: ChatFileRef;
+      mode?: 'static' | 'vite';
+      confirmation_token?: string;
+    }
+  >('/api/workspace-preview/start'),
+  stop: httpDelete<void, { session_id: string }>(
+    (params) => `/api/workspace-preview/${encodeURIComponent(params.session_id)}`
+  ),
+  changed: wsEmitter<{ session_id: string; changed_paths: string[] }>('workspace-preview.changed'),
+};
+
 // ---------------------------------------------------------------------------
 // File Watch — routed to /api/fs/watch/*
 // ---------------------------------------------------------------------------

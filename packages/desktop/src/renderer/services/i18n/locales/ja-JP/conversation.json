@@ -644,6 +644,7 @@
       "rename": "名前を変更",
       "addToChat": "チャットに追加",
       "copyRelativePath": "相対パスをコピー",
+      "livePreview": "ライブプレビュー",
       "copyAbsolutePath": "絶対パスをコピー",
       "newFile": "新規ファイル",
       "newDir": "新規フォルダー"
@@ -657,6 +658,9 @@
       "files": "ファイル",
       "changes": "変更"
     },
+    "livePreviewFailed": "ライブプレビューを開始できませんでした",
+    "confirmDevServer": "このプロジェクトには開発サーバーが必要です。{{command}} を実行しますか？依存関係はインストールされません。",
+    "previewDependenciesMissing": "プロジェクトの依存関係がありません。プロジェクトディレクトリでインストールしてから再試行してください。",
     "addedToChat": "{{name}} をチャットに追加しました",
     "imported": "{{count}} 件のファイルをインポートしました",
     "importPartialFailed": "{{copied}} 件コピー、{{failed}} 件失敗（名前の重複または非対応）",

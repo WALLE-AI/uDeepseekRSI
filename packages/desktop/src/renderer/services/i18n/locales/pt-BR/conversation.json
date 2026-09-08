@@ -652,6 +652,7 @@
       "newDir": "Nova pasta",
       "addToChat": "Adicionar ao chat",
       "copyRelativePath": "Copiar caminho relativo",
+      "livePreview": "Visualização ao vivo",
       "copyAbsolutePath": "Copiar caminho absoluto"
     },
     "namePlaceholder": "Nome",
@@ -663,6 +664,9 @@
       "files": "Arquivos",
       "changes": "Alterações"
     },
+    "livePreviewFailed": "Não foi possível iniciar a visualização ao vivo",
+    "confirmDevServer": "Este projeto precisa de um servidor de desenvolvimento. Executar {{command}}? Nenhuma dependência será instalada.",
+    "previewDependenciesMissing": "As dependências do projeto estão ausentes. Instale-as no diretório do projeto e tente novamente.",
     "addedToChat": "{{name}} adicionado ao chat",
     "imported": "{{count}} arquivo(s) importado(s)",
     "importPartialFailed": "{{copied}} copiado(s), {{failed}} com falha (conflitos de nome ou não suportados)",

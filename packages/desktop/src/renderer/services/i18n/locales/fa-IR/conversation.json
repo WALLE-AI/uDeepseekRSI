@@ -644,6 +644,7 @@
       "rename": "تغییر نام",
       "addToChat": "افزودن به گفتگو",
       "copyRelativePath": "کپی کردن مسیر نسبی",
+      "livePreview": "پیش‌نمایش زنده",
       "copyAbsolutePath": "کپی کردن مسیر مطلق",
       "newFile": "فایل جدید",
       "newDir": "پوشه جدید"
@@ -657,6 +658,9 @@
       "files": "پرونده‌ها",
       "changes": "تغییرات"
     },
+    "livePreviewFailed": "پیش‌نمایش زنده راه‌اندازی نشد",
+    "confirmDevServer": "این پروژه به سرور توسعه نیاز دارد. آیا {{command}} اجرا شود؟ هیچ وابستگی‌ای نصب نخواهد شد.",
+    "previewDependenciesMissing": "وابستگی‌های پروژه موجود نیستند. آن‌ها را در پوشه پروژه نصب کرده و دوباره تلاش کنید.",
     "addedToChat": "{{name}} به گفتگو افزوده شد",
     "imported": "{{count}} فایل وارد شد",
     "importPartialFailed": "{{copied}} کپی شد، {{failed}} ناموفق (تداخل نام یا پشتیبانی‌نشده)",

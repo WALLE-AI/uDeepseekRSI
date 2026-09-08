@@ -642,6 +642,7 @@ describe('buildTransferRequest', () => {
 describe('explorerContextMenuSections — grouped, ordered, divider-ready sections', () => {
   const NONE: ExplorerMenuCaps = {
     addToChat: false,
+    livePreview: false,
     revealInFolder: false,
     copyRelativePath: false,
     copyAbsolutePath: false,
@@ -738,6 +739,12 @@ describe('explorerContextMenuSections — grouped, ordered, divider-ready sectio
 
   it('returns no sections when nothing is enabled (the node shows no menu at all)', () => {
     expect(explorerContextMenuSections(NONE)).toEqual([]);
+  });
+
+  it('places live preview beside add-to-chat in the primary action section', () => {
+    expect(explorerContextMenuSections(caps({ addToChat: true, livePreview: true }))).toEqual([
+      ['addToChat', 'livePreview'],
+    ]);
   });
 
   it('a single enabled section stands alone — nothing to divide', () => {
