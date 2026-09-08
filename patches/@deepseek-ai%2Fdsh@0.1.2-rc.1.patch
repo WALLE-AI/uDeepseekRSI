@@ -1,20 +1,21 @@
 diff --git a/lib/profile-boot-BTzzdrGY.js b/lib/profile-boot-BTzzdrGY.js
-index 7785f03..7a17769 100644
+index 7785f03..4f050f1 100644
 --- a/lib/profile-boot-BTzzdrGY.js
 +++ b/lib/profile-boot-BTzzdrGY.js
 @@ -1,5 +1,5 @@
  import { writeFileSync } from "node:fs";
 -import { fileURLToPath } from "node:url";
 +import { fileURLToPath, pathToFileURL } from "node:url";
- import { PROFILE_PATCH_FILENAME, boot, composeEntries, healProfilesModuleFallback, installFailLoud, loadOptionalPatches, loadOverlayPatches, loadProfile, watchUserPatches } from "@deepseek-ai/dsh-app-boot";
+-import { PROFILE_PATCH_FILENAME, boot, composeEntries, healProfilesModuleFallback, installFailLoud, loadOptionalPatches, loadOverlayPatches, loadProfile, watchUserPatches } from "@deepseek-ai/dsh-app-boot";
++import { PROFILE_PATCH_FILENAME, boot as rawBoot, composeEntries, healProfilesModuleFallback, installFailLoud, loadOptionalPatches, loadOverlayPatches, loadProfile, watchUserPatches } from "@deepseek-ai/dsh-app-boot";
  import { join, resolve } from "node:path";
  import { resolveDshHome } from "@deepseek-ai/dsh-home-paths";
-@@ -267,7 +267,7 @@ async function runProfile(options) {
- 			exit: (code) => void shutdown.shutdown(code),
- 			ready: appReady.service
- 		});
--	});
-+	}, pathToFileURL(INSTALL_ANCHOR).href);
- 	app.current = ctx;
- 	if (composed.profile.patchReload === "live" && !signalShutdown.signal.aborted && ctx.fiber.state === 2 && ctx.get("loader") !== void 0) try {
- 		if (ctx.get("hmr") === void 0) {
+@@ -117,6 +117,8 @@ function homePatchPath() {
+ }
+ /** Absolute path of this dsh installation's package.json (both anchors: src/ and lib/ sit one level under apps/cli). */
+ const INSTALL_ANCHOR = fileURLToPath(new URL("../package.json", import.meta.url));
++const boot = (...args) => rawBoot(...args, pathToFileURL(INSTALL_ANCHOR).href);
++
+ /** The session-telemetry row id the DSH_TELEMETRY_DISABLED switch targets. */
+ const TELEMETRY_ROW_ID = "session-telemetry-otel";
+ /** The empty root entry list every profile tree patches over. */

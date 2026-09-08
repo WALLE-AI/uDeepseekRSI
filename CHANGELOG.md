@@ -13,7 +13,10 @@
 
 - **dsh:** support the first-run default provider
 - **dsh:** route compatible gateways through the pi-ai adapter
+- **dsh:** make the install-anchor patch portable across Bun CI platforms
+- **build:** remove the retired AionCore preparation step from release builds
 - **installer:** validate the packaged uworker executable
+- **ci:** detect the renamed uworker executable in Linux install smoke tests
 
 ---
 
