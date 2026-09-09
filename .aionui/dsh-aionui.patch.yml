@@ -22,6 +22,10 @@
   config:
     persona: !!js process.env.AIONUI_DSH_PERSONA || 'You are a coding agent. Your working directory is {{cwd}}.'
 
+- id: skill-filesystem
+  config:
+    customSkillDirs: !!js JSON.parse(process.env.AIONUI_SKILLS_DIRS_JSON || '[]')
+
 - id: web-search-deepseek
   config:
     apiKeyEnv: DEEPSEEK_SEARCH_API_KEY

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { mapStopReason } from './updateMapper';
-import type { BridgeStopReason, DshBridgeOptions, DshSession } from './types';
+import type { BridgeStopReason, DshBridgeOptions, DshMcpServer, DshSession } from './types';
 
 export class DshBridge {
   readonly #port: DshBridgeOptions['port'];
@@ -22,11 +22,11 @@ export class DshBridge {
     this.#started = true;
   }
 
-  async createSession(conversationId: string, cwd: string): Promise<DshSession> {
+  async createSession(conversationId: string, cwd: string, mcpServers?: readonly DshMcpServer[]): Promise<DshSession> {
     this.#assertReady();
     if (this.#sessions.has(conversationId))
       throw new Error(`Conversation already has a dsh session: ${conversationId}`);
-    const created = await this.#port.newSession(cwd);
+    const created = await this.#port.newSession(cwd, mcpServers);
     const session: DshSession = {
       conversationId,
       sessionId: created.sessionId,
@@ -38,11 +38,16 @@ export class DshBridge {
     return session;
   }
 
-  async resumeSession(conversationId: string, sessionId: string, cwd: string): Promise<DshSession> {
+  async resumeSession(
+    conversationId: string,
+    sessionId: string,
+    cwd: string,
+    mcpServers?: readonly DshMcpServer[]
+  ): Promise<DshSession> {
     this.#assertReady();
     if (this.#sessions.has(conversationId))
       throw new Error(`Conversation already has a dsh session: ${conversationId}`);
-    const resumed = await this.#port.resumeSession(sessionId, cwd);
+    const resumed = await this.#port.resumeSession(sessionId, cwd, mcpServers);
     const session: DshSession = {
       conversationId,
       sessionId,

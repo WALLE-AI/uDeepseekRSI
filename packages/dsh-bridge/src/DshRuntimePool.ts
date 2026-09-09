@@ -1,5 +1,5 @@
 import { DshBridge } from './DshBridge';
-import type { BridgeStopReason, DshAgentPort, DshSession } from './types';
+import type { BridgeStopReason, DshAgentPort, DshMcpServer, DshSession } from './types';
 
 export const DSH_OFFICE_ASSISTANT_ID = 'dsh:office';
 export const DSH_CODING_ASSISTANT_ID = 'dsh:coding';
@@ -76,16 +76,27 @@ export class DshRuntimePool {
     return mode ? this.#bridges.get(mode)?.getSession(conversationId) : undefined;
   }
 
-  async createSession(conversationId: string, cwd: string, mode: DshWorkMode): Promise<DshSession> {
+  async createSession(
+    conversationId: string,
+    cwd: string,
+    mode: DshWorkMode,
+    mcpServers?: readonly DshMcpServer[]
+  ): Promise<DshSession> {
     const bridge = await this.#bridge(mode);
-    const session = await bridge.createSession(conversationId, cwd);
+    const session = await bridge.createSession(conversationId, cwd, mcpServers);
     this.#conversationModes.set(conversationId, mode);
     return session;
   }
 
-  async resumeSession(conversationId: string, sessionId: string, cwd: string, mode: DshWorkMode): Promise<DshSession> {
+  async resumeSession(
+    conversationId: string,
+    sessionId: string,
+    cwd: string,
+    mode: DshWorkMode,
+    mcpServers?: readonly DshMcpServer[]
+  ): Promise<DshSession> {
     const bridge = await this.#bridge(mode);
-    const session = await bridge.resumeSession(conversationId, sessionId, cwd);
+    const session = await bridge.resumeSession(conversationId, sessionId, cwd, mcpServers);
     this.#conversationModes.set(conversationId, mode);
     return session;
   }

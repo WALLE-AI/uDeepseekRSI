@@ -1,10 +1,14 @@
 import { randomUUID } from 'node:crypto';
 import { watch, type FSWatcher } from 'node:fs';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import { mkdir, readFile, realpath, rename, stat, writeFile } from 'node:fs/promises';
-import { basename, dirname, extname, isAbsolute, join, relative, sep } from 'node:path';
+import { cp, lstat, mkdir, readFile, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { basename, delimiter, dirname, extname, isAbsolute, join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { load as parseYaml } from 'js-yaml';
 import { WebSocketServer, type WebSocket } from 'ws';
+import { Client as McpClient } from '@modelcontextprotocol/sdk/client/index.js';
+import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { createDshConnection } from './createDshConnection';
 import {
   assistantIdForWorkMode,
@@ -105,6 +109,60 @@ type StoredProvider = {
   is_full_url?: boolean;
 };
 
+type StoredMcpTransport =
+  | { type: 'stdio'; command: string; args: string[]; env: Record<string, string> }
+  | { type: 'http' | 'streamable_http' | 'sse'; url: string; headers: Record<string, string> };
+
+type StoredMcpServer = {
+  id: string;
+  name: string;
+  description?: string;
+  enabled: boolean;
+  transport: StoredMcpTransport;
+  original_json: string;
+  builtin: boolean;
+  created_at: number;
+  updated_at: number;
+};
+
+type AssistantListDefault = { mode: 'auto' | 'fixed'; value: string[] };
+type AssistantScalarDefault = { mode: 'auto' | 'fixed'; value?: string };
+
+type StoredAssistantConfig = {
+  enabledSkills: string[];
+  disabledBuiltinSkills: string[];
+  defaults: {
+    model: AssistantScalarDefault;
+    permission: AssistantScalarDefault;
+    thoughtLevel: AssistantScalarDefault;
+    skills: AssistantListDefault;
+    mcps: AssistantListDefault;
+  };
+};
+
+type ConversationCapabilitySnapshot = {
+  skillIds: string[];
+  disabledBuiltinSkillIds: string[];
+  mcpIds: string[];
+  model?: string;
+  permission?: string;
+  thoughtLevel?: string;
+  catalogRevision: number;
+  resolvedAt: number;
+};
+
+type SkillImportRecord = {
+  id: string;
+  operation_id: string;
+  source_label: string;
+  source_path?: string;
+  source_name: string;
+  skill_name?: string;
+  status: 'imported' | 'failed';
+  error_code?: string;
+  created_at: number;
+};
+
 export type ProviderCredentialStore = {
   get(providerId: string): Promise<string | undefined>;
   set(providerId: string, apiKey: string): Promise<void>;
@@ -146,6 +204,10 @@ type PersistedState = {
   workspaceBindings: WorkspaceBinding[];
   providers: StoredProvider[];
   defaultProviderId: string | null;
+  mcpServers: StoredMcpServer[];
+  assistantConfigs: Partial<Record<DshWorkMode, StoredAssistantConfig>>;
+  skillImportHistory: SkillImportRecord[];
+  catalogRevision: number;
 };
 
 type ActiveTurn = { turnId: string; messageId: string; text: string; startedAt: number };
@@ -160,6 +222,7 @@ export type DshApiServerOptions = {
   port?: number;
   cwd: string;
   dshHome: string;
+  skillsDir?: string;
   dataFile: string;
   patchPaths?: string[];
   env?: NodeJS.ProcessEnv;
@@ -180,6 +243,199 @@ export type DshApiServerOptions = {
 const DEFAULT_DSH_PROVIDER_ID = 'deepseek-official';
 const GATEWAY_DSH_PROVIDER_ID = 'aionui-gateway';
 const DEFAULT_MODEL_ID = 'deepseek-v4-flash';
+const SKILL_NAME_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const SKILL_MAX_FILE_BYTES = 1024 * 1024;
+const SKILL_MAX_TOTAL_BYTES = 10 * 1024 * 1024;
+
+function defaultAssistantConfig(defaultModelId = DEFAULT_MODEL_ID): StoredAssistantConfig {
+  return {
+    enabledSkills: [],
+    disabledBuiltinSkills: [],
+    defaults: {
+      model: { mode: 'fixed', value: defaultModelId },
+      permission: { mode: 'auto' },
+      thoughtLevel: { mode: 'auto' },
+      skills: { mode: 'fixed', value: [] },
+      mcps: { mode: 'fixed', value: [] },
+    },
+  };
+}
+
+function listDefault(value: unknown, fallback: AssistantListDefault): AssistantListDefault {
+  if (!value || typeof value !== 'object') return fallback;
+  const record = value as Record<string, unknown>;
+  return {
+    mode: record.mode === 'auto' ? 'auto' : 'fixed',
+    value: record.value === undefined ? fallback.value : stringArray(record.value),
+  };
+}
+
+function scalarDefault(value: unknown, fallback: AssistantScalarDefault): AssistantScalarDefault {
+  if (!value || typeof value !== 'object') return fallback;
+  const record = value as Record<string, unknown>;
+  const mode = record.mode === 'fixed' ? 'fixed' : 'auto';
+  const resolved = typeof record.value === 'string' && record.value.trim() ? record.value.trim() : undefined;
+  return { mode, ...(mode === 'fixed' && resolved ? { value: resolved } : {}) };
+}
+
+function parseSkillDocument(content: string): { name: string; description: string } {
+  const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
+  if (!match) throw new DshApiError(400, 'SKILL_INVALID', 'SKILL.md requires YAML frontmatter.');
+  const metadata = parseYaml(match[1]) as unknown;
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
+    throw new DshApiError(400, 'SKILL_INVALID', 'Skill frontmatter must be an object.');
+  }
+  const record = metadata as Record<string, unknown>;
+  const name = typeof record.name === 'string' ? record.name.trim() : '';
+  const description = typeof record.description === 'string' ? record.description.trim() : '';
+  if (!SKILL_NAME_PATTERN.test(name)) throw new DshApiError(400, 'SKILL_INVALID', 'Skill name is invalid.');
+  if (!description) throw new DshApiError(400, 'SKILL_INVALID', 'Skill description is required.');
+  return { name, description };
+}
+
+function normalizeMcpName(value: unknown): string {
+  const name = typeof value === 'string' ? value.trim() : '';
+  const hasControlCharacter = Array.from(name).some((character) => {
+    const codePoint = character.codePointAt(0) ?? 0;
+    return codePoint <= 0x1f || codePoint === 0x7f;
+  });
+  if (!name || hasControlCharacter) {
+    throw new DshApiError(400, 'MCP_NAME_INVALID', 'An MCP server name is required.');
+  }
+  return name;
+}
+
+function normalizeMcpTransport(value: unknown, existing?: StoredMcpTransport): StoredMcpTransport {
+  if (!value || typeof value !== 'object') {
+    if (existing) return existing;
+    throw new DshApiError(400, 'MCP_TRANSPORT_INVALID', 'An MCP transport is required.');
+  }
+  const transport = value as Record<string, unknown>;
+  if (transport.type === 'stdio') {
+    const command = typeof transport.command === 'string' ? transport.command.trim() : '';
+    if (!command) throw new DshApiError(400, 'MCP_COMMAND_REQUIRED', 'An MCP command is required.');
+    const args = Array.isArray(transport.args)
+      ? transport.args.map((item) => String(item))
+      : existing?.type === 'stdio'
+        ? existing.args
+        : [];
+    const env =
+      transport.env && typeof transport.env === 'object' && !Array.isArray(transport.env)
+        ? Object.fromEntries(Object.keys(transport.env as Record<string, unknown>).map((key) => [key, '']))
+        : existing?.type === 'stdio'
+          ? existing.env
+          : {};
+    return { type: 'stdio', command, args, env };
+  }
+  if (transport.type === 'http' || transport.type === 'streamable_http' || transport.type === 'sse') {
+    const urlValue = typeof transport.url === 'string' ? transport.url.trim() : '';
+    let url: URL;
+    try {
+      url = new URL(urlValue);
+    } catch {
+      throw new DshApiError(400, 'MCP_URL_INVALID', 'The MCP URL is invalid.');
+    }
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+      throw new DshApiError(400, 'MCP_URL_INVALID', 'Only HTTP and HTTPS MCP URLs are supported.');
+    }
+    const headers =
+      transport.headers && typeof transport.headers === 'object' && !Array.isArray(transport.headers)
+        ? Object.fromEntries(Object.keys(transport.headers as Record<string, unknown>).map((key) => [key, '']))
+        : existing && existing.type !== 'stdio'
+          ? existing.headers
+          : {};
+    return { type: transport.type, url: url.toString(), headers };
+  }
+  throw new DshApiError(400, 'MCP_TRANSPORT_UNSUPPORTED', 'The MCP transport is not supported.');
+}
+
+function mcpSecrets(value: unknown): Record<string, string> {
+  if (!value || typeof value !== 'object') return {};
+  const transport = value as Record<string, unknown>;
+  const source = transport.type === 'stdio' ? transport.env : transport.headers;
+  if (!source || typeof source !== 'object' || Array.isArray(source)) return {};
+  return Object.fromEntries(
+    Object.entries(source as Record<string, unknown>)
+      .filter(([, item]) => typeof item === 'string' && item.length > 0)
+      .map(([key, item]) => [key, String(item)])
+  );
+}
+
+async function validateSkillTree(path: string): Promise<number> {
+  const info = await lstat(path);
+  if (info.isSymbolicLink()) throw new DshApiError(400, 'SKILL_INVALID', 'Symbolic links are not supported.');
+  if (info.isFile()) {
+    if (info.size > SKILL_MAX_FILE_BYTES) {
+      throw new DshApiError(400, 'SKILL_IMPORT_LIMIT_EXCEEDED', 'A skill file exceeds the size limit.');
+    }
+    return info.size;
+  }
+  if (!info.isDirectory()) throw new DshApiError(400, 'SKILL_INVALID', 'The skill source is not a file or directory.');
+  let total = 0;
+  for (const entry of await readdir(path)) {
+    // Skill packages are intentionally validated recursively before copying.
+    // eslint-disable-next-line no-await-in-loop
+    total += await validateSkillTree(join(path, entry));
+    if (total > SKILL_MAX_TOTAL_BYTES) {
+      throw new DshApiError(400, 'SKILL_IMPORT_LIMIT_EXCEEDED', 'The skill package exceeds the size limit.');
+    }
+  }
+  return total;
+}
+
+async function skillDocumentPath(path: string): Promise<string> {
+  const info = await stat(path);
+  if (info.isDirectory()) return join(path, 'SKILL.md');
+  if (info.isFile() && extname(path).toLocaleLowerCase() === '.md') return path;
+  throw new DshApiError(400, 'SKILL_INVALID', 'A skill must be a Markdown file or a directory containing SKILL.md.');
+}
+
+async function scanSkillDirectory(root: string): Promise<Array<{ name: string; description: string; path: string }>> {
+  const sourceInfo = await lstat(root);
+  if (sourceInfo.isSymbolicLink() || !sourceInfo.isDirectory()) {
+    throw new DshApiError(400, 'SKILL_INVALID', 'The skill scan path must be a directory.');
+  }
+  const canonicalRoot = await realpath(root);
+  const candidates = [canonicalRoot, ...(await readdir(canonicalRoot)).map((entry) => join(canonicalRoot, entry))];
+  const skills: Array<{ name: string; description: string; path: string }> = [];
+  for (const candidate of candidates) {
+    try {
+      // A scan is intentionally shallow: a selected folder may itself be a skill or contain skill bundles.
+      // eslint-disable-next-line no-await-in-loop
+      const documentPath = await skillDocumentPath(candidate);
+      // eslint-disable-next-line no-await-in-loop
+      const parsed = parseSkillDocument(await readFile(documentPath, 'utf8'));
+      if (!skills.some((skill) => skill.name === parsed.name)) skills.push({ ...parsed, path: candidate });
+    } catch {
+      // Non-skill children are ignored; import performs strict validation on the selected result.
+    }
+  }
+  return skills.toSorted((left, right) => left.name.localeCompare(right.name));
+}
+
+async function resolveExecutable(command: string, env: NodeJS.ProcessEnv): Promise<string> {
+  const candidates: string[] = [];
+  if (isAbsolute(command)) {
+    candidates.push(command);
+  } else {
+    const extensions =
+      process.platform === 'win32' ? (env.PATHEXT ?? '.COM;.EXE;.BAT;.CMD').split(';').filter(Boolean) : [''];
+    for (const root of (env.PATH ?? '').split(delimiter).filter(Boolean)) {
+      for (const extension of extensions) {
+        candidates.push(join(root, process.platform === 'win32' ? `${command}${extension}` : command));
+      }
+    }
+  }
+  for (const candidate of candidates) {
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      if ((await stat(candidate)).isFile()) return candidate;
+    } catch {
+      // Continue through PATH candidates.
+    }
+  }
+  throw new DshApiError(400, 'MCP_COMMAND_NOT_FOUND', `The MCP command could not be resolved: ${command}`);
+}
 
 type ModelCatalogEntry = { id: string; label: string };
 
@@ -430,6 +686,10 @@ export class DshApiServer {
     workspaceBindings: [],
     providers: [],
     defaultProviderId: null,
+    mcpServers: [],
+    assistantConfigs: {},
+    skillImportHistory: [],
+    catalogRevision: 0,
   };
   #bridge: DshRuntimePool | null = null;
   #server: Server | null = null;
@@ -520,6 +780,7 @@ export class DshApiServer {
                 ...this.#runtimeEnv,
                 AIONUI_DEEPSEEK_MODELS_JSON: JSON.stringify(this.#models.map((model) => model.id)),
                 AIONUI_DSH_PERSONA: personaForDshWorkMode(mode),
+                AIONUI_SKILLS_DIRS_JSON: JSON.stringify([this.#skillsDir()]),
               },
               ...handlers,
             }),
@@ -575,6 +836,11 @@ export class DshApiServer {
         workspaceBindings: Array.isArray(parsed.workspaceBindings) ? parsed.workspaceBindings : [],
         providers: Array.isArray(parsed.providers) ? parsed.providers : [],
         defaultProviderId: typeof parsed.defaultProviderId === 'string' ? parsed.defaultProviderId : null,
+        mcpServers: Array.isArray(parsed.mcpServers) ? parsed.mcpServers : [],
+        assistantConfigs:
+          parsed.assistantConfigs && typeof parsed.assistantConfigs === 'object' ? parsed.assistantConfigs : {},
+        skillImportHistory: Array.isArray(parsed.skillImportHistory) ? parsed.skillImportHistory : [],
+        catalogRevision: Number.isInteger(parsed.catalogRevision) ? parsed.catalogRevision : 0,
       };
       for (const conversation of this.#state.conversations) {
         conversation.runtime = idleRuntime();
@@ -589,6 +855,10 @@ export class DshApiServer {
         workspaceBindings: [],
         providers: [],
         defaultProviderId: null,
+        mcpServers: [],
+        assistantConfigs: {},
+        skillImportHistory: [],
+        catalogRevision: 0,
       };
     }
   }
@@ -664,6 +934,287 @@ export class DshApiServer {
     );
     if (!registered) throw new Error('PROJECT_PATH_OUTSIDE_ROOT');
     return canonical;
+  }
+
+  #skillsDir(): string {
+    return this.#options.skillsDir ?? join(this.#options.dshHome, 'skills');
+  }
+
+  async #listSkills(): Promise<
+    Array<{
+      name: string;
+      description: string;
+      location: string;
+      is_auto_inject: boolean;
+      is_custom: boolean;
+      source: 'custom';
+    }>
+  > {
+    const root = this.#skillsDir();
+    await mkdir(root, { recursive: true });
+    const skills = [];
+    for (const entry of await readdir(root, { withFileTypes: true })) {
+      if (!entry.isDirectory() && !(entry.isFile() && extname(entry.name).toLocaleLowerCase() === '.md')) continue;
+      const sourcePath = join(root, entry.name);
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        const documentPath = await skillDocumentPath(sourcePath);
+        // eslint-disable-next-line no-await-in-loop
+        const parsed = parseSkillDocument(await readFile(documentPath, 'utf8'));
+        skills.push({
+          ...parsed,
+          location: documentPath,
+          is_auto_inject: false,
+          is_custom: true,
+          source: 'custom' as const,
+        });
+      } catch {
+        // Invalid entries stay invisible until the import flow reports their precise error.
+      }
+    }
+    return skills.toSorted((left, right) => left.name.localeCompare(right.name));
+  }
+
+  async #importSkill(sourcePath: string): Promise<{ skill_name: string; skill_names: string[]; failed: [] }> {
+    if (!isAbsolute(sourcePath)) throw new DshApiError(400, 'SKILL_INVALID', 'The skill source path must be absolute.');
+    const canonicalSource = await realpath(sourcePath);
+    await validateSkillTree(canonicalSource);
+    const documentPath = await skillDocumentPath(canonicalSource);
+    const parsed = parseSkillDocument(await readFile(documentPath, 'utf8'));
+    const root = this.#skillsDir();
+    await mkdir(root, { recursive: true });
+    const destination = join(root, parsed.name);
+    try {
+      await stat(destination);
+      throw new DshApiError(409, 'SKILL_NAME_CONFLICT', `A skill named ${parsed.name} already exists.`);
+    } catch (error) {
+      if (error instanceof DshApiError) throw error;
+    }
+    const temporary = `${destination}.tmp-${randomUUID()}`;
+    try {
+      const sourceInfo = await stat(canonicalSource);
+      if (sourceInfo.isDirectory()) {
+        await cp(canonicalSource, temporary, { recursive: true, errorOnExist: true });
+      } else {
+        await mkdir(temporary, { recursive: true });
+        await cp(canonicalSource, join(temporary, 'SKILL.md'), { errorOnExist: true });
+      }
+      await rename(temporary, destination);
+    } catch (error) {
+      await rm(temporary, { recursive: true, force: true });
+      throw error;
+    }
+    const now = Date.now();
+    this.#state.skillImportHistory.push({
+      id: randomUUID(),
+      operation_id: randomUUID(),
+      source_label: basename(sourcePath),
+      source_path: sourcePath,
+      source_name: basename(sourcePath),
+      skill_name: parsed.name,
+      status: 'imported',
+      created_at: now,
+    });
+    this.#state.catalogRevision += 1;
+    await this.#persist();
+    return { skill_name: parsed.name, skill_names: [parsed.name], failed: [] };
+  }
+
+  #assistantConfig(mode: DshWorkMode): StoredAssistantConfig {
+    return this.#state.assistantConfigs[mode] ?? defaultAssistantConfig(this.#defaultModelId());
+  }
+
+  #normalizeAssistantConfig(body: Record<string, unknown>, current: StoredAssistantConfig): StoredAssistantConfig {
+    const defaults =
+      body.defaults && typeof body.defaults === 'object' ? (body.defaults as Record<string, unknown>) : {};
+    const enabledSkills = body.enabled_skills === undefined ? current.enabledSkills : stringArray(body.enabled_skills);
+    const disabledBuiltinSkills =
+      body.disabled_builtin_skills === undefined
+        ? current.disabledBuiltinSkills
+        : stringArray(body.disabled_builtin_skills);
+    return {
+      enabledSkills,
+      disabledBuiltinSkills,
+      defaults: {
+        model: scalarDefault(defaults.model, current.defaults.model),
+        permission: scalarDefault(defaults.permission, current.defaults.permission),
+        thoughtLevel: scalarDefault(defaults.thought_level, current.defaults.thoughtLevel),
+        skills: listDefault(defaults.skills, {
+          ...current.defaults.skills,
+          value: enabledSkills.length > 0 ? enabledSkills : current.defaults.skills.value,
+        }),
+        mcps: listDefault(defaults.mcps, current.defaults.mcps),
+      },
+    };
+  }
+
+  #resolveCapabilities(
+    mode: DshWorkMode,
+    assistantBody: Record<string, unknown>,
+    conversationExtra: Record<string, unknown>
+  ): ConversationCapabilitySnapshot {
+    const config = this.#assistantConfig(mode);
+    const overrides =
+      assistantBody.conversation_overrides && typeof assistantBody.conversation_overrides === 'object'
+        ? (assistantBody.conversation_overrides as Record<string, unknown>)
+        : {};
+    const enabledMcpIds = this.#state.mcpServers.filter((server) => server.enabled).map((server) => server.id);
+    const skills = overrides.skill_ids === undefined ? config.defaults.skills.value : stringArray(overrides.skill_ids);
+    const requestedMcps =
+      overrides.mcp_ids === undefined
+        ? config.defaults.mcps.mode === 'auto'
+          ? enabledMcpIds
+          : config.defaults.mcps.value
+        : stringArray(overrides.mcp_ids);
+    const transientBuiltinIds = new Set(
+      Array.isArray(conversationExtra.selected_session_mcp_servers)
+        ? conversationExtra.selected_session_mcp_servers
+            .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object'))
+            .map((item) => (typeof item.id === 'string' ? item.id : ''))
+            .filter(Boolean)
+        : []
+    );
+    const mcps = requestedMcps.filter((id) => !transientBuiltinIds.has(id));
+    const scalar = (key: 'model' | 'permission' | 'thought_level', fallback: AssistantScalarDefault) => {
+      const override = overrides[key];
+      return typeof override === 'string' && override.trim()
+        ? override.trim()
+        : fallback.mode === 'fixed'
+          ? fallback.value
+          : undefined;
+    };
+    return {
+      skillIds: skills,
+      disabledBuiltinSkillIds:
+        overrides.disabled_builtin_skill_ids === undefined
+          ? config.disabledBuiltinSkills
+          : stringArray(overrides.disabled_builtin_skill_ids),
+      mcpIds: mcps,
+      model: scalar('model', config.defaults.model),
+      permission: scalar('permission', config.defaults.permission),
+      thoughtLevel: scalar('thought_level', config.defaults.thoughtLevel),
+      catalogRevision: this.#state.catalogRevision,
+      resolvedAt: Date.now(),
+    };
+  }
+
+  #conversationCapabilities(conversation: StoredConversation): ConversationCapabilitySnapshot {
+    const value = conversation.extra.capability_snapshot;
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      return {
+        skillIds: [],
+        disabledBuiltinSkillIds: [],
+        mcpIds: [],
+        catalogRevision: 0,
+        resolvedAt: conversation.created_at,
+      };
+    }
+    const snapshot = value as Record<string, unknown>;
+    return {
+      skillIds: stringArray(snapshot.skillIds),
+      disabledBuiltinSkillIds: stringArray(snapshot.disabledBuiltinSkillIds),
+      mcpIds: stringArray(snapshot.mcpIds),
+      model: typeof snapshot.model === 'string' ? snapshot.model : undefined,
+      permission: typeof snapshot.permission === 'string' ? snapshot.permission : undefined,
+      thoughtLevel: typeof snapshot.thoughtLevel === 'string' ? snapshot.thoughtLevel : undefined,
+      catalogRevision: typeof snapshot.catalogRevision === 'number' ? snapshot.catalogRevision : 0,
+      resolvedAt: typeof snapshot.resolvedAt === 'number' ? snapshot.resolvedAt : conversation.created_at,
+    };
+  }
+
+  async #mcpSecretMap(serverId: string): Promise<Record<string, string>> {
+    const value = await this.#credentialStore.get(`mcp:${serverId}`);
+    if (!value) return {};
+    try {
+      const parsed = JSON.parse(value) as unknown;
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? (parsed as Record<string, string>) : {};
+    } catch {
+      return {};
+    }
+  }
+
+  async #normalizeMcpServer(body: Record<string, unknown>, existing?: StoredMcpServer): Promise<StoredMcpServer> {
+    const now = Date.now();
+    const id = existing?.id ?? randomUUID();
+    const name = body.name === undefined && existing ? existing.name : normalizeMcpName(body.name);
+    const duplicate = this.#state.mcpServers.some(
+      (server) => server.id !== id && server.name.toLocaleLowerCase() === name.toLocaleLowerCase()
+    );
+    if (duplicate) throw new DshApiError(409, 'MCP_NAME_CONFLICT', `An MCP server named ${name} already exists.`);
+    const rawTransport = body.transport ?? existing?.transport;
+    const transport = normalizeMcpTransport(rawTransport, existing?.transport);
+    const previousSecrets = await this.#mcpSecretMap(id);
+    const nextSecrets = { ...previousSecrets, ...mcpSecrets(rawTransport) };
+    if (Object.keys(nextSecrets).length > 0) {
+      await this.#credentialStore.set(`mcp:${id}`, JSON.stringify(nextSecrets));
+    }
+    return {
+      id,
+      name,
+      description: typeof body.description === 'string' ? body.description : existing?.description,
+      enabled: typeof body.enabled === 'boolean' ? body.enabled : (existing?.enabled ?? false),
+      transport,
+      original_json: '{}',
+      builtin: typeof body.builtin === 'boolean' ? body.builtin : (existing?.builtin ?? false),
+      created_at: existing?.created_at ?? now,
+      updated_at: now,
+    };
+  }
+
+  async #toDshMcpServer(server: StoredMcpServer): Promise<DshMcpServer> {
+    const secrets = await this.#mcpSecretMap(server.id);
+    if (server.transport.type === 'sse') {
+      throw new DshApiError(400, 'MCP_TRANSPORT_UNSUPPORTED', 'SSE MCP servers are not supported by DSH ACP.');
+    }
+    if (server.transport.type === 'stdio') {
+      return {
+        name: server.name,
+        command: await resolveExecutable(server.transport.command, this.#runtimeEnv),
+        args: server.transport.args,
+        env: Object.keys(server.transport.env).map((name) => ({ name, value: secrets[name] ?? '' })),
+      };
+    }
+    return {
+      name: server.name,
+      type: 'http',
+      url: server.transport.url,
+      headers: Object.keys(server.transport.headers).map((name) => ({ name, value: secrets[name] ?? '' })),
+    };
+  }
+
+  async #resolvedMcpServers(snapshot: ConversationCapabilitySnapshot): Promise<DshMcpServer[]> {
+    const selected: DshMcpServer[] = [...(this.#options.mcpServers ?? [])];
+    for (const id of snapshot.mcpIds) {
+      const server = this.#state.mcpServers.find((candidate) => candidate.id === id);
+      if (!server) throw new DshApiError(400, 'MCP_NOT_FOUND', `MCP server not found: ${id}`);
+      // Preserve deterministic order from the persisted snapshot.
+      // eslint-disable-next-line no-await-in-loop
+      selected.push(await this.#toDshMcpServer(server));
+    }
+    return selected;
+  }
+
+  async #testMcpServer(server: StoredMcpServer): Promise<{ success: true; tools: unknown[] }> {
+    const resolved = await this.#toDshMcpServer(server);
+    const client = new McpClient({ name: 'aionui-mcp-probe', version: '1.0.0' });
+    const transport =
+      'command' in resolved
+        ? new StdioClientTransport({
+            command: resolved.command,
+            args: resolved.args,
+            env: Object.fromEntries(resolved.env.map((entry) => [entry.name, entry.value])),
+            cwd: this.#options.cwd,
+          })
+        : new StreamableHTTPClientTransport(new URL(resolved.url), {
+            requestInit: { headers: Object.fromEntries(resolved.headers.map((entry) => [entry.name, entry.value])) },
+          });
+    try {
+      await client.connect(transport, { timeout: 10_000 });
+      const result = await client.listTools(undefined, { timeout: 10_000 });
+      return { success: true, tools: result.tools };
+    } finally {
+      await client.close().catch((): undefined => undefined);
+    }
   }
 
   async #loadModelCatalog(): Promise<void> {
@@ -1069,19 +1620,37 @@ export class DshApiServer {
       if (!sameCanonicalPath(existingSession.cwd, workspace)) throw new Error('WORKSPACE_BINDING_MISMATCH');
       return;
     }
-    const session = conversation.session_id
-      ? await this.#bridge?.resumeSession(conversation.id, conversation.session_id, workspace, workMode)
-      : await this.#bridge?.createSession(conversation.id, workspace, workMode);
+    const capabilities = this.#conversationCapabilities(conversation);
+    const mcpServers = await this.#resolvedMcpServers(capabilities);
+    let session = conversation.session_id
+      ? await this.#bridge?.resumeSession(conversation.id, conversation.session_id, workspace, workMode, mcpServers)
+      : await this.#bridge?.createSession(conversation.id, workspace, workMode, mcpServers);
     if (!session) throw new Error('DeepSeek Harness bridge is unavailable.');
     conversation.session_id = session.sessionId;
     conversation.extra.acp_session_id = session.sessionId;
-    const currentModelId = toUiModelId(conversation.extra.current_model_id);
+    const options = [
+      capabilities.model ? { id: 'model', value: toDshModelValue(this.#providerId, capabilities.model) } : undefined,
+      capabilities.permission ? { id: 'permission', value: capabilities.permission } : undefined,
+      capabilities.thoughtLevel ? { id: 'thought_level', value: capabilities.thoughtLevel } : undefined,
+    ].filter((option): option is { id: string; value: string } => option !== undefined);
+    for (const option of options) {
+      // ACP applies startup defaults serially to preserve config dependency order.
+      // eslint-disable-next-line no-await-in-loop
+      session = (await this.#bridge?.setConfigOption(conversation.id, option.id, option.value)) ?? session;
+    }
+    const currentModelId = toUiModelId(capabilities.model ?? conversation.extra.current_model_id);
     conversation.extra.current_model_id = currentModelId;
     conversation.extra.cached_config_options = this.#uiConfigOptions(session.configOptions, currentModelId);
     await this.#persist();
   }
 
-  async #sendPrompt(conversation: StoredConversation, text: string, turnId: string, messageId: string): Promise<void> {
+  async #sendPrompt(
+    conversation: StoredConversation,
+    text: string,
+    turnId: string,
+    messageId: string,
+    explicitSkillIds: string[] = []
+  ): Promise<void> {
     try {
       await this.#ensureSession(conversation);
       this.#emit('message.stream', {
@@ -1092,7 +1661,19 @@ export class DshApiServer {
         conversation_id: conversation.id,
         created_at: Date.now(),
       });
-      const stopReason = await this.#bridge?.prompt(conversation.id, text, turnId);
+      const session = this.#bridge?.getSession(conversation.id);
+      const capabilities = this.#conversationCapabilities(conversation);
+      const needsSkillInjection =
+        Boolean(session) &&
+        capabilities.skillIds.length > 0 &&
+        conversation.extra.skills_injected_session_id !== session?.sessionId;
+      const skillIds = [...(needsSkillInjection ? capabilities.skillIds : []), ...explicitSkillIds].filter(
+        (name, index, values) => SKILL_NAME_PATTERN.test(name) && values.indexOf(name) === index
+      );
+      const skillGestures = skillIds.map((name) => `/${name}`);
+      const promptText = skillGestures.length > 0 ? `${text}\n\n${skillGestures.join(' ')}` : text;
+      const stopReason = await this.#bridge?.prompt(conversation.id, promptText, turnId);
+      if (needsSkillInjection && session) conversation.extra.skills_injected_session_id = session.sessionId;
       const active = this.#activeTurns.get(conversation.id);
       if (active?.text) {
         (this.#state.messages[conversation.id] ??= []).push({
@@ -1249,8 +1830,212 @@ export class DshApiServer {
         responseData(response, true);
         return;
       }
-      if (path.startsWith('/api/providers') || path === '/api/agents/provider-health-check') {
+      if (
+        path.startsWith('/api/providers') ||
+        path === '/api/agents/provider-health-check' ||
+        path.startsWith('/api/skills') ||
+        path.startsWith('/api/mcp') ||
+        (path.startsWith('/api/assistants/') && method !== 'GET')
+      ) {
         this.#assertProviderAccess(request);
+      }
+      if (path === '/api/skills' && method === 'GET') {
+        responseData(response, await this.#listSkills());
+        return;
+      }
+      if (path === '/api/skills/import-limits' && method === 'GET') {
+        responseData(response, { max_file_bytes: SKILL_MAX_FILE_BYTES, max_total_bytes: SKILL_MAX_TOTAL_BYTES });
+        return;
+      }
+      if (path === '/api/skills/import-history' && method === 'GET') {
+        responseData(
+          response,
+          this.#state.skillImportHistory.toSorted((left, right) => right.created_at - left.created_at)
+        );
+        return;
+      }
+      if (path === '/api/skills/paths' && method === 'GET') {
+        responseData(response, { user_skills_dir: this.#skillsDir(), builtin_skills_dir: '' });
+        return;
+      }
+      if (path === '/api/skills/scan' && method === 'POST') {
+        const body = await readJsonBody(request);
+        if (typeof body.folder_path !== 'string' || !isAbsolute(body.folder_path)) {
+          throw new DshApiError(400, 'SKILL_INVALID', 'The skill scan path must be absolute.');
+        }
+        responseData(response, await scanSkillDirectory(body.folder_path));
+        return;
+      }
+      if (path === '/api/skills/materialize-for-agent' && method === 'POST') {
+        const body = await readJsonBody(request);
+        const conversationId = typeof body.conversation_id === 'string' ? body.conversation_id : '';
+        if (!this.#state.conversations.some((conversation) => conversation.id === conversationId)) {
+          throw new DshApiError(404, 'CONVERSATION_NOT_FOUND');
+        }
+        const requested = new Set(stringArray(body.skills));
+        const available = (await this.#listSkills()).filter((skill) => requested.has(skill.name));
+        if (available.length !== requested.size) throw new DshApiError(404, 'SKILL_NOT_FOUND');
+        responseData(response, {
+          skills: available.map((skill) => ({ name: skill.name, source_path: skill.location })),
+        });
+        return;
+      }
+      if (path === '/api/skills/detect-paths' && method === 'GET') {
+        responseData(response, []);
+        return;
+      }
+      if (path === '/api/skills/detect-external' && method === 'GET') {
+        responseData(response, []);
+        return;
+      }
+      if (path === '/api/skills/external-paths' && method === 'GET') {
+        responseData(response, []);
+        return;
+      }
+      if ((path === '/api/skills/market/enable' || path === '/api/skills/market/disable') && method === 'POST') {
+        responseData(response, null);
+        return;
+      }
+      if (path === '/api/skills/info' && method === 'POST') {
+        const body = await readJsonBody(request);
+        if (typeof body.skill_path !== 'string') throw new DshApiError(400, 'SKILL_INVALID');
+        const root = await realpath(this.#skillsDir());
+        const documentPath = await realpath(await skillDocumentPath(body.skill_path));
+        const pathFromRoot = relative(root, documentPath);
+        if (pathFromRoot.startsWith('..') || isAbsolute(pathFromRoot))
+          throw new DshApiError(403, 'SKILL_PATH_OUTSIDE_ROOT');
+        responseData(response, parseSkillDocument(await readFile(documentPath, 'utf8')));
+        return;
+      }
+      if (path === '/api/skills/import' && method === 'POST') {
+        const body = await readJsonBody(request);
+        if (typeof body.skill_path !== 'string') throw new DshApiError(400, 'SKILL_INVALID');
+        responseData(response, await this.#importSkill(body.skill_path), 201);
+        return;
+      }
+      const skillDeleteMatch = path.match(/^\/api\/skills\/([^/]+)$/);
+      if (skillDeleteMatch && method === 'DELETE') {
+        const skillName = decodeURIComponent(skillDeleteMatch[1]);
+        const skill = (await this.#listSkills()).find((candidate) => candidate.name === skillName);
+        if (!skill) throw new DshApiError(404, 'SKILL_NOT_FOUND');
+        const root = await realpath(this.#skillsDir());
+        const source =
+          basename(skill.location).toLocaleLowerCase() === 'skill.md' ? dirname(skill.location) : skill.location;
+        const pathFromRoot = relative(root, source);
+        if (!pathFromRoot || pathFromRoot.startsWith('..') || isAbsolute(pathFromRoot)) {
+          throw new DshApiError(403, 'SKILL_PATH_OUTSIDE_ROOT');
+        }
+        await rm(source, { recursive: true, force: true });
+        this.#state.catalogRevision += 1;
+        await this.#persist();
+        responseData(response, null);
+        return;
+      }
+      if (path === '/api/mcp/servers' && method === 'GET') {
+        responseData(response, this.#state.mcpServers);
+        return;
+      }
+      if (path === '/api/mcp/servers' && method === 'POST') {
+        const server = await this.#normalizeMcpServer(await readJsonBody(request));
+        this.#state.mcpServers.push(server);
+        this.#state.catalogRevision += 1;
+        await this.#persist();
+        responseData(response, server, 201);
+        return;
+      }
+      if (path === '/api/mcp/servers/import' && method === 'POST') {
+        const body = await readJsonBody(request);
+        if (!Array.isArray(body.servers)) throw new DshApiError(400, 'MCP_IMPORT_INVALID');
+        const imported: StoredMcpServer[] = [];
+        try {
+          for (const candidate of body.servers) {
+            if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) {
+              throw new DshApiError(400, 'MCP_IMPORT_INVALID');
+            }
+            // Preserve request order so imported selections remain deterministic.
+            // eslint-disable-next-line no-await-in-loop
+            const server = await this.#normalizeMcpServer(candidate as Record<string, unknown>);
+            this.#state.mcpServers.push(server);
+            imported.push(server);
+          }
+        } catch (error) {
+          this.#state.mcpServers = this.#state.mcpServers.filter(
+            (server) => !imported.some((candidate) => candidate.id === server.id)
+          );
+          await Promise.all(imported.map((server) => this.#credentialStore.delete(`mcp:${server.id}`)));
+          throw error;
+        }
+        this.#state.catalogRevision += 1;
+        await this.#persist();
+        responseData(response, imported, 201);
+        return;
+      }
+      if (path === '/api/mcp/agent-configs' && method === 'GET') {
+        responseData(response, []);
+        return;
+      }
+      if (path === '/api/mcp/oauth/check-status' && method === 'POST') {
+        responseData(response, { authenticated: false });
+        return;
+      }
+      if (path === '/api/mcp/oauth/authenticated' && method === 'GET') {
+        responseData(response, []);
+        return;
+      }
+      if (path === '/api/mcp/oauth/login' && method === 'POST') {
+        responseData(response, { success: false, error: 'OAuth is not available in the direct DSH backend.' });
+        return;
+      }
+      if (path === '/api/mcp/oauth/logout' && method === 'POST') {
+        responseData(response, null);
+        return;
+      }
+      if (path === '/api/mcp/test-connection' && method === 'POST') {
+        const body = await readJsonBody(request);
+        const server = this.#state.mcpServers.find((candidate) => candidate.id === body.id);
+        if (!server) throw new DshApiError(404, 'MCP_NOT_FOUND');
+        try {
+          responseData(response, await this.#testMcpServer(server));
+        } catch (error) {
+          responseData(response, {
+            success: false,
+            code: error instanceof DshApiError ? error.code : 'MCP_START_FAILED',
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+        return;
+      }
+      const mcpServerMatch = path.match(/^\/api\/mcp\/servers\/([^/]+)(?:\/(toggle))?$/);
+      if (mcpServerMatch) {
+        const serverId = decodeURIComponent(mcpServerMatch[1]);
+        const index = this.#state.mcpServers.findIndex((candidate) => candidate.id === serverId);
+        if (index < 0) throw new DshApiError(404, 'MCP_NOT_FOUND');
+        const existing = this.#state.mcpServers[index];
+        if (mcpServerMatch[2] === 'toggle' && method === 'POST') {
+          const updated = { ...existing, enabled: !existing.enabled, updated_at: Date.now() };
+          this.#state.mcpServers[index] = updated;
+          this.#state.catalogRevision += 1;
+          await this.#persist();
+          responseData(response, updated);
+          return;
+        }
+        if (!mcpServerMatch[2] && method === 'PUT') {
+          const updated = await this.#normalizeMcpServer(await readJsonBody(request), existing);
+          this.#state.mcpServers[index] = updated;
+          this.#state.catalogRevision += 1;
+          await this.#persist();
+          responseData(response, updated);
+          return;
+        }
+        if (!mcpServerMatch[2] && method === 'DELETE') {
+          await this.#credentialStore.delete(`mcp:${serverId}`);
+          this.#state.mcpServers.splice(index, 1);
+          this.#state.catalogRevision += 1;
+          await this.#persist();
+          responseData(response, null);
+          return;
+        }
+        throw new DshApiError(405, 'METHOD_NOT_ALLOWED');
       }
       if (path === '/api/providers/default') {
         if (method === 'GET') {
@@ -1459,6 +2244,16 @@ export class DshApiServer {
         responseData(response, this.#assistantDetailRecord(mode));
         return;
       }
+      if (assistantDetailMatch && method === 'PUT') {
+        const assistantId = decodeURIComponent(assistantDetailMatch[1]);
+        const mode = workModeFromAssistantId(assistantId);
+        if (!mode) throw new DshApiError(404, 'NOT_FOUND', 'Assistant not found.');
+        const updated = this.#normalizeAssistantConfig(await readJsonBody(request), this.#assistantConfig(mode));
+        this.#state.assistantConfigs[mode] = updated;
+        await this.#persist();
+        responseData(response, this.#assistantRecord(mode));
+        return;
+      }
       if (path.startsWith('/api/shell/')) {
         if (!this.#options.desktopShell) {
           responseData(response, { error: 'Desktop shell is unavailable.', code: 'SHELL_UNAVAILABLE' }, 501);
@@ -1582,6 +2377,13 @@ export class DshApiServer {
         const assistantId = assistantIdForWorkMode(workMode);
         const assistantName = this.#workModeName(workMode);
         const extra = body.extra && typeof body.extra === 'object' ? (body.extra as Record<string, unknown>) : {};
+        const capabilitySnapshot = this.#resolveCapabilities(workMode, assistantBody, extra);
+        const {
+          selected_session_mcp_servers: _selectedSessionMcpServers,
+          preset_enabled_skills: _presetEnabledSkills,
+          exclude_auto_inject_skills: _excludeAutoInjectSkills,
+          ...persistedExtra
+        } = extra;
         const requestedWorkspace =
           typeof extra.workspace === 'string' && extra.workspace ? extra.workspace : this.#options.cwd;
         const canonicalWorkspace = await canonicalizeWorkspace(requestedWorkspace);
@@ -1597,11 +2399,12 @@ export class DshApiServer {
           created_at: now,
           modified_at: now,
           extra: {
-            ...extra,
+            ...persistedExtra,
             workspace: canonicalWorkspace,
             backend: 'acp',
-            current_model_id: this.#modelOptions()[0]?.id ?? DEFAULT_MODEL_ID,
+            current_model_id: capabilitySnapshot.model ?? this.#modelOptions()[0]?.id ?? DEFAULT_MODEL_ID,
             work_mode: workMode,
+            capability_snapshot: capabilitySnapshot,
           },
           project_id: project.id,
           runtime: idleRuntime(),
@@ -1867,6 +2670,7 @@ export class DshApiServer {
           }
           const body = await readJsonBody(request);
           const text = typeof body.content === 'string' ? body.content : '';
+          const explicitSkillIds = stringArray(body.inject_skills);
           if (!text.trim()) {
             responseData(response, { error: 'Message content is empty.', code: 'INVALID_MESSAGE' }, 400);
             return;
@@ -1892,7 +2696,7 @@ export class DshApiServer {
           conversation.modified_at = createdAt;
           this.#activeTurns.set(conversationId, { turnId, messageId: assistantId, text: '', startedAt: createdAt });
           await this.#persist();
-          void this.#sendPrompt(conversation, text, turnId, assistantId);
+          void this.#sendPrompt(conversation, text, turnId, assistantId, explicitSkillIds);
           responseData(response, { msg_id: userId, turn_id: turnId, runtime: conversation.runtime }, 202);
           return;
         }
@@ -1972,25 +2776,8 @@ export class DshApiServer {
           return;
         }
       }
-      if (
-        path === '/api/skills' ||
-        path === '/api/cron/jobs' ||
-        path === '/api/mcp/servers' ||
-        path === '/api/teams' ||
-        path === '/api/extensions/acp-adapters'
-      ) {
+      if (path === '/api/cron/jobs' || path === '/api/teams' || path === '/api/extensions/acp-adapters') {
         responseData(response, []);
-        return;
-      }
-      if (path === '/api/mcp/servers/import' && method === 'POST') {
-        const body = await readJsonBody(request);
-        const servers = Array.isArray(body.servers) ? body.servers : [];
-        responseData(
-          response,
-          servers.map((server, index) =>
-            Object.assign({}, server && typeof server === 'object' ? server : {}, { id: `bootstrap-${index}` })
-          )
-        );
         return;
       }
       const channelSettingsMatch = path.match(/^\/api\/channel\/settings\/([^/]+)$/);
@@ -2054,6 +2841,7 @@ export class DshApiServer {
 
   #assistantRecord(mode: DshWorkMode): Record<string, unknown> {
     const assistantId = assistantIdForWorkMode(mode);
+    const config = this.#assistantConfig(mode);
     return {
       id: assistantId,
       name: this.#workModeName(mode),
@@ -2068,9 +2856,9 @@ export class DshApiServer {
       sort_order: DSH_WORK_MODES.indexOf(mode),
       agent_id: assistantId,
       agent: { type: 'acp', source: 'builtin', acp_backend: assistantId },
-      enabled_skills: [],
+      enabled_skills: config.enabledSkills,
       custom_skill_names: [],
-      disabled_builtin_skills: [],
+      disabled_builtin_skills: config.disabledBuiltinSkills,
       prompts: [],
       models: this.#models.map((model) => model.id),
       agent_status: 'online',
@@ -2083,6 +2871,7 @@ export class DshApiServer {
   #assistantDetailRecord(mode: DshWorkMode): Record<string, unknown> {
     const defaultModelId = this.#defaultModelId();
     const assistantId = assistantIdForWorkMode(mode);
+    const config = this.#assistantConfig(mode);
     return {
       id: assistantId,
       source: 'generated',
@@ -2105,16 +2894,19 @@ export class DshApiServer {
       rules: { content: '', storage_mode: 'backend' },
       prompts: { recommended: [], recommended_i18n: {} },
       defaults: {
-        model: { mode: 'fixed', value: defaultModelId },
-        permission: { mode: 'auto' },
-        thought_level: { mode: 'auto' },
-        skills: { mode: 'fixed', value: [] },
-        mcps: { mode: 'fixed', value: [] },
+        model:
+          config.defaults.model.mode === 'fixed'
+            ? { mode: 'fixed', value: config.defaults.model.value ?? defaultModelId }
+            : { mode: 'auto' },
+        permission: config.defaults.permission,
+        thought_level: config.defaults.thoughtLevel,
+        skills: config.defaults.skills,
+        mcps: config.defaults.mcps,
       },
       capabilities: {
-        default_skill_ids: [],
+        default_skill_ids: config.defaults.skills.value,
         custom_skill_names: [],
-        default_disabled_builtin_skill_ids: [],
+        default_disabled_builtin_skill_ids: config.disabledBuiltinSkills,
       },
       preferences: {
         last_model_id: defaultModelId,

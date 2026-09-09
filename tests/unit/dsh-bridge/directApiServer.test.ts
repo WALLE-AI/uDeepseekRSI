@@ -30,16 +30,23 @@ async function createServer(
   let requestPermission: ((request: BridgePermissionRequest) => Promise<BridgePermissionDecision>) | undefined;
   const sessions = new Map<string, string>();
   const setConfigCalls: Array<{ sessionId: string; configId: string; value: string }> = [];
+  const sessionMcpServers: unknown[][] = [];
+  const prompts: string[] = [];
   const port: DshAgentPort = {
     initialize: async () => ({ protocolVersion: 1, capabilities: {} }),
-    newSession: async (cwd) => {
+    newSession: async (cwd, mcpServers) => {
       sessions.set('session-1', cwd);
+      sessionMcpServers.push([...(mcpServers ?? [])]);
       return { sessionId: 'session-1', configOptions: [] };
     },
-    resumeSession: async () => ({ configOptions: [] }),
+    resumeSession: async (_sessionId, _cwd, mcpServers) => {
+      sessionMcpServers.push([...(mcpServers ?? [])]);
+      return { configOptions: [] };
+    },
     closeSession: async () => undefined,
     prompt: async (sessionId, prompt) => {
       const conversationId = sessions.get(sessionId) ?? '';
+      prompts.push(prompt[0]?.text ?? '');
       if (prompt[0]?.text === 'use tool') {
         await requestPermission?.({
           conversationId,
@@ -83,7 +90,14 @@ async function createServer(
     await server.stop();
     await rm(root, { recursive: true, force: true });
   });
-  return { baseUrl: `http://127.0.0.1:${serverPort}`, root, serverPort, setConfigCalls };
+  return {
+    baseUrl: `http://127.0.0.1:${serverPort}`,
+    root,
+    serverPort,
+    setConfigCalls,
+    sessionMcpServers,
+    prompts,
+  };
 }
 
 describe('direct DeepSeek Harness HTTP backend', () => {
@@ -460,6 +474,208 @@ describe('direct DeepSeek Harness HTTP backend', () => {
     expect(detail.data.defaults.model).toMatchObject({ mode: 'fixed' });
     expect(typeof detail.data.defaults.model.value).toBe('string');
     expect(detail.data.preferences.last_mcp_ids).toEqual([]);
+  });
+
+  it('imports a skill and injects an assistant default only once per dsh session', async () => {
+    const { baseUrl, root, prompts } = await createServer();
+    const source = join(root, 'skill-source');
+    await mkdir(source, { recursive: true });
+    await writeFile(
+      join(source, 'SKILL.md'),
+      '---\nname: concise-summary\ndescription: Summarize precisely\n---\nDo it.\n'
+    );
+
+    const imported = await fetch(`${baseUrl}/api/skills/import`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ skill_path: source }),
+    });
+    const listed = (await (await fetch(`${baseUrl}/api/skills`)).json()) as {
+      data: Array<{ name: string; source: string }>;
+    };
+    expect(imported.status).toBe(201);
+    expect(listed.data).toContainEqual(expect.objectContaining({ name: 'concise-summary', source: 'custom' }));
+
+    await fetch(`${baseUrl}/api/assistants/dsh%3Acoding`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        enabled_skills: ['concise-summary'],
+        defaults: { skills: { mode: 'fixed', value: ['concise-summary'] } },
+      }),
+    });
+    const created = (await (
+      await fetch(`${baseUrl}/api/conversations`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ assistant: { id: 'dsh:coding' }, extra: {} }),
+      })
+    ).json()) as { data: { id: string } };
+
+    for (const content of ['first', 'second']) {
+      // Requests must remain sequential to verify injection state after the first completed turn.
+      // eslint-disable-next-line no-await-in-loop
+      await fetch(`${baseUrl}/api/conversations/${created.data.id}/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content }),
+      });
+      // eslint-disable-next-line no-await-in-loop
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+
+    expect(prompts[0]).toContain('/concise-summary');
+    expect(prompts[1]).toBe('second');
+  });
+
+  it('scans and materializes an imported skill for a conversation', async () => {
+    const { baseUrl, root } = await createServer();
+    const source = join(root, 'scan-source');
+    await mkdir(source, { recursive: true });
+    await writeFile(join(source, 'SKILL.md'), '---\nname: scan-skill\ndescription: Scanned skill\n---\nUse it.\n');
+
+    const scanned = (await (
+      await fetch(`${baseUrl}/api/skills/scan`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ folder_path: source }),
+      })
+    ).json()) as { data: Array<{ name: string }> };
+    await fetch(`${baseUrl}/api/skills/import`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ skill_path: source }),
+    });
+    const conversation = (await (
+      await fetch(`${baseUrl}/api/conversations`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ assistant: { id: 'dsh:office' }, extra: {} }),
+      })
+    ).json()) as { data: { id: string } };
+    const materialized = (await (
+      await fetch(`${baseUrl}/api/skills/materialize-for-agent`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ conversation_id: conversation.data.id, skills: ['scan-skill'] }),
+      })
+    ).json()) as { data: { skills: Array<{ name: string; source_path: string }> } };
+
+    expect(scanned.data).toEqual([expect.objectContaining({ name: 'scan-skill' })]);
+    expect(materialized.data.skills[0]).toMatchObject({ name: 'scan-skill' });
+    expect(materialized.data.skills[0].source_path).toContain('SKILL.md');
+  });
+
+  it('keeps MCP secrets out of persisted state and hydrates them for the selected session', async () => {
+    const { baseUrl, root, sessionMcpServers } = await createServer();
+    const createdServer = (await (
+      await fetch(`${baseUrl}/api/mcp/servers`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: 'fixture-mcp',
+          enabled: true,
+          transport: { type: 'stdio', command: process.execPath, args: ['fixture.js'], env: { MCP_SECRET: 'secret' } },
+          original_json: '{"secret":"secret"}',
+        }),
+      })
+    ).json()) as { data: { id: string } };
+    const conversation = (await (
+      await fetch(`${baseUrl}/api/conversations`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          assistant: { id: 'dsh:office', conversation_overrides: { mcp_ids: [createdServer.data.id] } },
+          extra: {},
+        }),
+      })
+    ).json()) as { data: { id: string } };
+
+    const ensured = await fetch(`${baseUrl}/api/conversations/${conversation.data.id}/runtime/ensure`, {
+      method: 'POST',
+    });
+
+    expect(ensured.status).toBe(200);
+    expect(JSON.stringify(sessionMcpServers[0])).toContain('secret');
+    expect(await readFile(join(root, 'state.json'), 'utf8')).not.toContain('secret');
+  });
+
+  it('rolls back a conflicting MCP batch import', async () => {
+    const { baseUrl } = await createServer();
+    const response = await fetch(`${baseUrl}/api/mcp/servers/import`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        servers: [
+          { name: 'duplicate-mcp', transport: { type: 'stdio', command: process.execPath } },
+          { name: 'duplicate-mcp', transport: { type: 'stdio', command: process.execPath } },
+        ],
+      }),
+    });
+    const listed = (await (await fetch(`${baseUrl}/api/mcp/servers`)).json()) as { data: unknown[] };
+
+    expect(response.status).toBe(409);
+    expect(listed.data).toEqual([]);
+  });
+
+  it('uses the conversation MCP snapshot after the global enabled state changes', async () => {
+    const { baseUrl, sessionMcpServers } = await createServer();
+    const server = (await (
+      await fetch(`${baseUrl}/api/mcp/servers`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: 'snapshot-mcp',
+          enabled: true,
+          transport: { type: 'stdio', command: process.execPath, args: [] },
+        }),
+      })
+    ).json()) as { data: { id: string } };
+    await fetch(`${baseUrl}/api/assistants/dsh:office`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ defaults: { mcps: { mode: 'auto', value: [] } } }),
+    });
+    const conversation = (await (
+      await fetch(`${baseUrl}/api/conversations`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ assistant: { id: 'dsh:office' }, extra: {} }),
+      })
+    ).json()) as { data: { id: string } };
+    await fetch(`${baseUrl}/api/mcp/servers/${server.data.id}/toggle`, { method: 'POST' });
+
+    await fetch(`${baseUrl}/api/conversations/${conversation.data.id}/runtime/ensure`, { method: 'POST' });
+
+    expect(JSON.stringify(sessionMcpServers[0])).toContain('snapshot-mcp');
+  });
+
+  it('rejects an SSE MCP before creating the dsh session', async () => {
+    const { baseUrl, sessionMcpServers } = await createServer();
+    const server = (await (
+      await fetch(`${baseUrl}/api/mcp/servers`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'legacy-sse', transport: { type: 'sse', url: 'https://example.com/sse' } }),
+      })
+    ).json()) as { data: { id: string } };
+    const conversation = (await (
+      await fetch(`${baseUrl}/api/conversations`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          assistant: { id: 'dsh:office', conversation_overrides: { mcp_ids: [server.data.id] } },
+          extra: {},
+        }),
+      })
+    ).json()) as { data: { id: string } };
+
+    const response = await fetch(`${baseUrl}/api/conversations/${conversation.data.id}/runtime/ensure`, {
+      method: 'POST',
+    });
+
+    expect(response.status).toBe(400);
+    expect(sessionMcpServers).toHaveLength(0);
   });
 
   it('persists the selected work mode on new conversations', async () => {

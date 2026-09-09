@@ -1,5 +1,17 @@
 # Changelog
 
+## [2.2.3](https://github.com/WALLE-AI/uDeepseekRSI/compare/v2.2.2...v2.2.3) (2026-09-09)
+
+### Desktop
+
+#### Features
+
+- **modes:** add a research mode for academic, market, policy, legal, and purchasing research
+- **provider:** configure the DeepSeek Harness provider Base URL and API key from the model settings UI
+- **provider:** securely store API keys and hot-reload the selected provider across office, coding, and research modes
+
+---
+
 ## [2.2.2](https://github.com/WALLE-AI/uDeepseekRSI/compare/v2.2.1...v2.2.2) (2026-09-08)
 
 ### Desktop
