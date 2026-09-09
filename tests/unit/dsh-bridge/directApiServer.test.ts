@@ -288,8 +288,12 @@ describe('direct DeepSeek Harness HTTP backend', () => {
     };
 
     expect(response.status).toBe(200);
-    expect(body.data).toHaveLength(2);
-    expect(body.data.map((assistant) => assistant.agent.acp_backend)).toEqual(['dsh:office', 'dsh:coding']);
+    expect(body.data).toHaveLength(3);
+    expect(body.data.map((assistant) => assistant.agent.acp_backend)).toEqual([
+      'dsh:office',
+      'dsh:coding',
+      'dsh:research',
+    ]);
     expect(body.data.every((assistant) => assistant.models.every((model) => typeof model === 'string'))).toBe(true);
 
     const detailResponse = await fetch(`${baseUrl}/api/assistants/dsh%3Adeepseek-harness`);
@@ -314,6 +318,22 @@ describe('direct DeepSeek Harness HTTP backend', () => {
 
     expect(created.data.assistant.id).toBe('dsh:coding');
     expect(created.data.extra.work_mode).toBe('coding');
+  });
+
+  it('persists research mode as an isolated conversation runtime', async () => {
+    const { baseUrl } = await createServer();
+    const response = await fetch(`${baseUrl}/api/conversations`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ assistant: { id: 'dsh:research' }, extra: {} }),
+    });
+    const created = (await response.json()) as {
+      data: { assistant: { id: string }; extra: { work_mode: string } };
+    };
+
+    expect(response.status).toBe(201);
+    expect(created.data.assistant.id).toBe('dsh:research');
+    expect(created.data.extra.work_mode).toBe('research');
   });
 
   it('does not allow a conversation work mode to change through extra updates', async () => {

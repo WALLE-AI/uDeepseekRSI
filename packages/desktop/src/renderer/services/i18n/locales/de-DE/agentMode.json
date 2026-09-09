@@ -21,6 +21,7 @@
   "switchFailed": "Moduswechsel fehlgeschlagen",
   "work": {
     "office": "Büromodus",
-    "coding": "Codierungsmodus"
+    "coding": "Codierungsmodus",
+    "research": "Forschungsmodus"
   }
 }

@@ -21,6 +21,7 @@
   "switchFailed": "Failed to switch mode",
   "work": {
     "office": "Ofis Modu",
-    "coding": "Kodlama Modu"
+    "coding": "Kodlama Modu",
+    "research": "Araştırma Modu"
   }
 }

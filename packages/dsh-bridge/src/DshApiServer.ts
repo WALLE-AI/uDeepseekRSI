@@ -1590,11 +1590,15 @@ export class DshApiServer {
   }
 
   #workModeName(mode: DshWorkMode): string {
-    return mode === 'office' ? 'Office Mode' : 'Coding Mode';
+    if (mode === 'office') return 'Office Mode';
+    if (mode === 'research') return 'Research Mode';
+    return 'Coding Mode';
   }
 
   #workModeDescription(mode: DshWorkMode): string {
-    return mode === 'office' ? 'Documents, spreadsheets, presentations, and research' : 'Code, tests, and repositories';
+    if (mode === 'office') return 'Documents, spreadsheets, presentations, and data organization';
+    if (mode === 'research') return 'Deep research, source analysis, and evidence-backed reports';
+    return 'Code, tests, and repositories';
   }
 
   #assistantRecord(mode: DshWorkMode): Record<string, unknown> {
@@ -1610,7 +1614,7 @@ export class DshApiServer {
       source: 'generated',
       avatar: '',
       enabled: true,
-      sort_order: mode === 'office' ? 0 : 1,
+      sort_order: DSH_WORK_MODES.indexOf(mode),
       agent_id: assistantId,
       agent: { type: 'acp', source: 'builtin', acp_backend: assistantId },
       enabled_skills: [],
@@ -1642,7 +1646,7 @@ export class DshApiServer {
         description_i18n: {},
         avatar: '',
       },
-      state: { enabled: true, sort_order: mode === 'office' ? 0 : 1 },
+      state: { enabled: true, sort_order: DSH_WORK_MODES.indexOf(mode) },
       engine: {
         agent_id: assistantId,
         agent: { type: 'acp', source: 'builtin', acp_backend: assistantId },

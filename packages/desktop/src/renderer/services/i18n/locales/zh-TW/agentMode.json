@@ -21,6 +21,7 @@
   "switchFailed": "模式切換失敗",
   "work": {
     "office": "辦公模式",
-    "coding": "編碼模式"
+    "coding": "編碼模式",
+    "research": "研究模式"
   }
 }

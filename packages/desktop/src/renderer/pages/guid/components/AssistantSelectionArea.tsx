@@ -6,7 +6,7 @@
 
 import styles from '../index.module.css';
 import { assistantRuntimeKey, dshAssistantWorkMode, type Assistant } from '@/common/types/agent/assistantTypes';
-import { Briefcase, Code, Down, Robot } from '@icon-park/react';
+import { Briefcase, Code, Down, Microscope, Robot } from '@icon-park/react';
 import { Button } from '@arco-design/web-react';
 import { AionSearchInput } from '@/renderer/components/base';
 import { useAssistantOrder } from '@/renderer/hooks/assistant/useAssistantOrder';
@@ -258,6 +258,8 @@ const AssistantSelectionArea: React.FC<AssistantSelectionAreaProps> = ({
             <Briefcase theme='outline' size={14} />
           ) : workMode === 'coding' ? (
             <Code theme='outline' size={14} />
+          ) : workMode === 'research' ? (
+            <Microscope theme='outline' size={14} />
           ) : (
             <Robot theme='outline' size={14} />
           )}

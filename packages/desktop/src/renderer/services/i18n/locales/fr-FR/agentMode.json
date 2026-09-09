@@ -21,6 +21,7 @@
   "switchFailed": "Échec du changement de mode",
   "work": {
     "office": "Mode bureautique",
-    "coding": "Mode codage"
+    "coding": "Mode codage",
+    "research": "Mode recherche"
   }
 }

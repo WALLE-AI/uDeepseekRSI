@@ -21,6 +21,7 @@
   "switchFailed": "Failed to switch mode",
   "work": {
     "office": "Office Mode",
-    "coding": "Coding Mode"
+    "coding": "Coding Mode",
+    "research": "Research Mode"
   }
 }

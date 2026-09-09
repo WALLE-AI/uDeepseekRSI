@@ -7,7 +7,14 @@
 import { dshAssistantWorkMode, type Assistant } from '@/common/types/agent/assistantTypes';
 
 type AssistantNameSource = Pick<Assistant, 'id' | 'name' | 'name_i18n'>;
-type AssistantNameTranslator = (key: 'agentMode.work.office' | 'agentMode.work.coding') => string;
+type WorkModeNameKey = 'agentMode.work.office' | 'agentMode.work.coding' | 'agentMode.work.research';
+type AssistantNameTranslator = (key: WorkModeNameKey) => string;
+
+const WORK_MODE_NAME_KEYS = {
+  office: 'agentMode.work.office',
+  coding: 'agentMode.work.coding',
+  research: 'agentMode.work.research',
+} as const satisfies Record<NonNullable<ReturnType<typeof dshAssistantWorkMode>>, WorkModeNameKey>;
 
 export function resolveAssistantName(
   assistant: AssistantNameSource | null | undefined,
@@ -21,7 +28,7 @@ export function resolveAssistantName(
 
   const workMode = dshAssistantWorkMode(assistant.id);
   if (workMode && translate) {
-    return translate(workMode === 'office' ? 'agentMode.work.office' : 'agentMode.work.coding');
+    return translate(WORK_MODE_NAME_KEYS[workMode]);
   }
 
   const localizedName = assistant.name_i18n?.[localeKey] || assistant.name_i18n?.['en-US'];

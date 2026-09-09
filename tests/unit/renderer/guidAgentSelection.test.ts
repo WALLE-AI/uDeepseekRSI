@@ -7,8 +7,12 @@ import {
 } from '@/renderer/pages/guid/hooks/useGuidAssistantSelection';
 import { resolveAssistantName } from '@/renderer/utils/model/assistantDisplay';
 
-const translateWorkMode = (key: 'agentMode.work.office' | 'agentMode.work.coding') =>
-  key === 'agentMode.work.office' ? '办公模式' : '编码模式';
+const translateWorkMode = (key: 'agentMode.work.office' | 'agentMode.work.coding' | 'agentMode.work.research') =>
+  ({
+    'agentMode.work.office': '办公模式',
+    'agentMode.work.coding': '编码模式',
+    'agentMode.work.research': '研究模式',
+  })[key];
 
 describe('guid assistant selection helpers', () => {
   const assistants: Assistant[] = [
@@ -34,6 +38,7 @@ describe('guid assistant selection helpers', () => {
     const modeAssistants = [
       assistant({ id: 'dsh:office', source: 'generated', runtimeKey: 'dsh:office', sort_order: 0 }),
       assistant({ id: 'dsh:coding', source: 'generated', runtimeKey: 'dsh:coding', sort_order: 1 }),
+      assistant({ id: 'dsh:research', source: 'generated', runtimeKey: 'dsh:research', sort_order: 2 }),
     ];
 
     expect(pickDefaultAssistantSelectionKey(modeAssistants)).toBe('dsh:office');
@@ -57,6 +62,14 @@ describe('guid assistant selection helpers', () => {
         translateWorkMode
       )
     ).toBe('编码模式');
+    expect(
+      resolveAssistantName(
+        assistant({ id: 'dsh:research', source: 'generated', runtimeKey: 'dsh:research' }),
+        'zh-CN',
+        'Assistant',
+        translateWorkMode
+      )
+    ).toBe('研究模式');
   });
 
   it('returns null when no assistants are available', () => {

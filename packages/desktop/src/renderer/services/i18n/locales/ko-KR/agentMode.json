@@ -21,6 +21,7 @@
   "switchFailed": "모드 전환에 실패했습니다",
   "work": {
     "office": "오피스 모드",
-    "coding": "코딩 모드"
+    "coding": "코딩 모드",
+    "research": "연구 모드"
   }
 }

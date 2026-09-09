@@ -13,13 +13,15 @@ export type AssistantAgentSource = 'internal' | 'builtin' | 'extension' | 'custo
 
 export const DSH_OFFICE_ASSISTANT_ID = 'dsh:office';
 export const DSH_CODING_ASSISTANT_ID = 'dsh:coding';
+export const DSH_RESEARCH_ASSISTANT_ID = 'dsh:research';
 export const LEGACY_DSH_ASSISTANT_ID = 'dsh:deepseek-harness';
 
-export type DshAssistantWorkMode = 'office' | 'coding';
+export type DshAssistantWorkMode = 'office' | 'coding' | 'research';
 
 export function dshAssistantWorkMode(assistantId: string): DshAssistantWorkMode | undefined {
   if (assistantId === DSH_OFFICE_ASSISTANT_ID) return 'office';
   if (assistantId === DSH_CODING_ASSISTANT_ID || assistantId === LEGACY_DSH_ASSISTANT_ID) return 'coding';
+  if (assistantId === DSH_RESEARCH_ASSISTANT_ID) return 'research';
   return undefined;
 }
 

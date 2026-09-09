@@ -21,6 +21,7 @@
   "switchFailed": "Falha ao alternar modo",
   "work": {
     "office": "Modo de escritório",
-    "coding": "Modo de programação"
+    "coding": "Modo de programação",
+    "research": "Modo de pesquisa"
   }
 }

@@ -86,6 +86,7 @@ export type I18nKey =
   | 'agentMode.switchSuccess'
   | 'agentMode.work.coding'
   | 'agentMode.work.office'
+  | 'agentMode.work.research'
   | 'agentMode.yolo'
   | 'agentMode.yoloNoSandbox'
   | 'codex.config.export_success'

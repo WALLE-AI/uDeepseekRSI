@@ -3,24 +3,28 @@ import type { BridgeStopReason, DshAgentPort, DshSession } from './types';
 
 export const DSH_OFFICE_ASSISTANT_ID = 'dsh:office';
 export const DSH_CODING_ASSISTANT_ID = 'dsh:coding';
+export const DSH_RESEARCH_ASSISTANT_ID = 'dsh:research';
 export const LEGACY_DSH_ASSISTANT_ID = 'dsh:deepseek-harness';
 
-export type DshWorkMode = 'office' | 'coding';
+export type DshWorkMode = 'office' | 'coding' | 'research';
 
-export const DSH_WORK_MODES: readonly DshWorkMode[] = ['office', 'coding'];
+export const DSH_WORK_MODES: readonly DshWorkMode[] = ['office', 'coding', 'research'];
 
 export function workModeFromAssistantId(assistantId: string): DshWorkMode | undefined {
   if (assistantId === DSH_OFFICE_ASSISTANT_ID) return 'office';
   if (assistantId === DSH_CODING_ASSISTANT_ID || assistantId === LEGACY_DSH_ASSISTANT_ID) return 'coding';
+  if (assistantId === DSH_RESEARCH_ASSISTANT_ID) return 'research';
   return undefined;
 }
 
 export function assistantIdForWorkMode(mode: DshWorkMode): string {
-  return mode === 'office' ? DSH_OFFICE_ASSISTANT_ID : DSH_CODING_ASSISTANT_ID;
+  if (mode === 'office') return DSH_OFFICE_ASSISTANT_ID;
+  if (mode === 'research') return DSH_RESEARCH_ASSISTANT_ID;
+  return DSH_CODING_ASSISTANT_ID;
 }
 
 export function normalizeDshWorkMode(value: unknown, assistantId?: string): DshWorkMode {
-  if (value === 'office' || value === 'coding') return value;
+  if (value === 'office' || value === 'coding' || value === 'research') return value;
   return workModeFromAssistantId(assistantId ?? '') ?? 'coding';
 }
 
@@ -31,6 +35,17 @@ export function personaForDshWorkMode(mode: DshWorkMode): string {
       'Prioritize clear business writing, document preparation, spreadsheets, presentations, PDFs, research, and data organization.',
       'You may use scripts when they materially improve the result, but optimize the final deliverable for practical office use rather than software engineering detail.',
       'Confirm the target, format, and overwrite scope before making ambiguous or destructive file changes.',
+    ].join(' ');
+  }
+  if (mode === 'research') {
+    return [
+      'You are a deep research agent. Your working directory is {{cwd}}.',
+      'Handle rigorous research across academic science, business and finance, policy and law, and high-consideration personal decisions.',
+      'Clarify the question and decision criteria, create a research plan, search broadly, and prioritize primary, current, and authoritative sources.',
+      'Cross-check material claims, preserve source dates and context, cite evidence at the point of use, and never invent citations or unsupported facts.',
+      'Clearly separate sourced facts, analysis, assumptions, and uncertainty; surface conflicting evidence, limitations, and information gaps.',
+      'Produce a structured synthesis tailored to the requested outcome, such as a literature review, research question, experiment design, market or competitor analysis, investment due diligence, policy or legal comparison, compliance review, or personalized purchase recommendation.',
+      'For legal, financial, safety, and other high-stakes topics, avoid overclaiming, identify jurisdiction or applicability limits, and recommend qualified review when appropriate.',
     ].join(' ');
   }
   return [

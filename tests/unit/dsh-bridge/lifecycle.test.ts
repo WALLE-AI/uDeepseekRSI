@@ -84,11 +84,13 @@ describe('dsh work mode runtime pool', () => {
     expect(createdModes).toEqual([]);
     await pool.createSession('office-conversation', 'D:/office', 'office');
     await pool.createSession('coding-conversation', 'D:/code', 'coding');
+    await pool.createSession('research-conversation', 'D:/research', 'research');
 
-    expect(createdModes).toEqual(['office', 'coding']);
+    expect(createdModes).toEqual(['office', 'coding', 'research']);
     expect(pool.getSession('office-conversation')?.sessionId).toBe('office-session');
     expect(pool.getSession('coding-conversation')?.sessionId).toBe('coding-session');
-    expect(ports.size).toBe(2);
+    expect(pool.getSession('research-conversation')?.sessionId).toBe('research-session');
+    expect(ports.size).toBe(3);
     await pool.dispose();
   });
 
@@ -113,5 +115,7 @@ describe('dsh work mode runtime pool', () => {
     expect(normalizeDshWorkMode(undefined, 'dsh:deepseek-harness')).toBe('coding');
     expect(personaForDshWorkMode('office')).toContain('office productivity agent');
     expect(personaForDshWorkMode('coding')).toContain('coding agent');
+    expect(personaForDshWorkMode('research')).toContain('deep research agent');
+    expect(personaForDshWorkMode('research')).toContain('never invent citations');
   });
 });

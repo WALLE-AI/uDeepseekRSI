@@ -21,6 +21,7 @@
   "switchFailed": "Error al cambiar modo",
   "work": {
     "office": "Modo oficina",
-    "coding": "Modo de programación"
+    "coding": "Modo de programación",
+    "research": "Modo de investigación"
   }
 }
