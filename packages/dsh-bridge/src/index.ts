@@ -14,7 +14,7 @@ export {
 export type { DshWorkMode } from './DshRuntimePool';
 export { createDshConnection } from './createDshConnection';
 export { DshApiServer } from './DshApiServer';
-export type { DshApiServerOptions } from './DshApiServer';
+export type { DshApiServerOptions, ProviderCredentialStore } from './DshApiServer';
 export { OfficePreviewError, OfficePreviewService } from './officePreviewService';
 export type {
   OfficeDocumentType,

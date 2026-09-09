@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer as createHttpServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join, resolve as resolvePath } from 'node:path';
@@ -20,7 +20,11 @@ afterEach(async () => {
   await Promise.all(cleanups.splice(0).map((cleanup) => cleanup()));
 });
 
-async function createServer(env?: NodeJS.ProcessEnv, officePreviewPort?: OfficePreviewPort) {
+async function createServer(
+  env?: NodeJS.ProcessEnv,
+  officePreviewPort?: OfficePreviewPort,
+  options?: { authToken?: string }
+) {
   const root = await mkdtemp(join(tmpdir(), 'dsh-api-server-'));
   let emitUpdate: ((update: BridgeUpdate) => void) | undefined;
   let requestPermission: ((request: BridgePermissionRequest) => Promise<BridgePermissionDecision>) | undefined;
@@ -72,6 +76,7 @@ async function createServer(env?: NodeJS.ProcessEnv, officePreviewPort?: OfficeP
     },
     env,
     officePreviewPort,
+    authToken: options?.authToken,
   });
   const serverPort = await server.start();
   cleanups.push(async () => {
@@ -187,6 +192,158 @@ describe('direct DeepSeek Harness HTTP backend', () => {
     });
 
     expect(setConfigCalls.at(-1)?.value).toBe('["deepseek-official","deepseek-v4-pro"]');
+  });
+
+  it('stores a provider without returning or persisting its API key', async () => {
+    const modelsServer = createHttpServer((_request, response) => {
+      response.writeHead(200, { 'Content-Type': 'application/json' });
+      response.end(JSON.stringify({ data: [{ id: 'deepseek-chat' }] }));
+    });
+    await new Promise<void>((resolve) => modelsServer.listen(0, '127.0.0.1', resolve));
+    const address = modelsServer.address();
+    if (!address || typeof address === 'string') throw new Error('Provider fixture server did not start.');
+    cleanups.push(() => new Promise<void>((resolve) => modelsServer.close(() => resolve())));
+    const { baseUrl, root } = await createServer({});
+
+    const response = await fetch(`${baseUrl}/api/providers`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        id: 'provider-1',
+        platform: 'custom',
+        name: 'DeepSeek',
+        base_url: `http://127.0.0.1:${address.port}/v1`,
+        api_key: 'secret-provider-key',
+        models: ['deepseek-chat'],
+      }),
+    });
+    const created = (await response.json()) as {
+      data: { api_key: string; has_api_key: boolean; api_key_hint: string };
+    };
+
+    expect(response.status).toBe(201);
+    expect(created.data).toMatchObject({ api_key: '', has_api_key: true, api_key_hint: '...-key' });
+    expect(await readFile(join(root, 'state.json'), 'utf8')).not.toContain('secret-provider-key');
+  });
+
+  it('keeps a stored API key when an edit sends an empty key', async () => {
+    let authorization = '';
+    const modelsServer = createHttpServer((request, response) => {
+      authorization = String(request.headers.authorization ?? '');
+      response.writeHead(200, { 'Content-Type': 'application/json' });
+      response.end(JSON.stringify({ data: [{ id: 'deepseek-chat' }] }));
+    });
+    await new Promise<void>((resolve) => modelsServer.listen(0, '127.0.0.1', resolve));
+    const address = modelsServer.address();
+    if (!address || typeof address === 'string') throw new Error('Provider fixture server did not start.');
+    cleanups.push(() => new Promise<void>((resolve) => modelsServer.close(() => resolve())));
+    const { baseUrl } = await createServer({});
+    await fetch(`${baseUrl}/api/providers`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        id: 'provider-1',
+        platform: 'custom',
+        name: 'Before',
+        base_url: `http://127.0.0.1:${address.port}/v1`,
+        api_key: 'preserved-key',
+        models: ['deepseek-chat'],
+      }),
+    });
+
+    await fetch(`${baseUrl}/api/providers/provider-1`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'After', api_key: '' }),
+    });
+    authorization = '';
+    const modelsResponse = await fetch(`${baseUrl}/api/providers/provider-1/models`, { method: 'POST' });
+
+    expect(modelsResponse.status).toBe(200);
+    expect(authorization).toBe('Bearer preserved-key');
+  });
+
+  it('clears a stored API key only when explicitly requested', async () => {
+    const { baseUrl } = await createServer({});
+    const provider = (id: string) => ({
+      id,
+      platform: 'custom',
+      name: id,
+      base_url: 'http://127.0.0.1:3000/v1',
+      api_key: `${id}-key`,
+      models: ['deepseek-chat'],
+    });
+    await fetch(`${baseUrl}/api/providers`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(provider('default-provider')),
+    });
+    await fetch(`${baseUrl}/api/providers`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(provider('secondary-provider')),
+    });
+
+    const response = await fetch(`${baseUrl}/api/providers/secondary-provider`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ clear_api_key: true }),
+    });
+    const updated = (await response.json()) as { data: { api_key: string; has_api_key: boolean } };
+
+    expect(response.status).toBe(200);
+    expect(updated.data).toMatchObject({ api_key: '', has_api_key: false });
+  });
+
+  it('uses a selected UI provider when encoding a model for DeepSeek Harness', async () => {
+    const modelsServer = createHttpServer((_request, response) => {
+      response.writeHead(200, { 'Content-Type': 'application/json' });
+      response.end(JSON.stringify({ data: [{ id: 'deepseek-chat' }] }));
+    });
+    await new Promise<void>((resolve) => modelsServer.listen(0, '127.0.0.1', resolve));
+    const address = modelsServer.address();
+    if (!address || typeof address === 'string') throw new Error('Provider fixture server did not start.');
+    cleanups.push(() => new Promise<void>((resolve) => modelsServer.close(() => resolve())));
+    const { baseUrl, setConfigCalls } = await createServer({});
+    await fetch(`${baseUrl}/api/providers`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        id: 'provider-1',
+        platform: 'custom',
+        name: 'DeepSeek',
+        base_url: `http://127.0.0.1:${address.port}/v1`,
+        api_key: 'provider-key',
+        models: ['deepseek-chat'],
+      }),
+    });
+    const created = (await (
+      await fetch(`${baseUrl}/api/conversations`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ extra: {} }),
+      })
+    ).json()) as { data: { id: string } };
+    await fetch(`${baseUrl}/api/conversations/${created.data.id}/runtime/ensure`, { method: 'POST' });
+    await fetch(`${baseUrl}/api/conversations/${created.data.id}/config-options/model`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ value: 'deepseek-chat' }),
+    });
+
+    expect(setConfigCalls.at(-1)?.value).toBe('["aionui-gateway","deepseek-chat"]');
+  });
+
+  it('rejects provider access without the internal backend token', async () => {
+    const { baseUrl } = await createServer(undefined, undefined, { authToken: 'internal-token' });
+
+    const denied = await fetch(`${baseUrl}/api/providers`);
+    const allowed = await fetch(`${baseUrl}/api/providers`, {
+      headers: { 'X-AionUI-Backend-Token': 'internal-token' },
+    });
+
+    expect(denied.status).toBe(401);
+    expect(allowed.status).toBe(200);
   });
 
   it('loads pure model ids from /v1/models and only encodes the provider when setting dsh config', async () => {

@@ -1,6 +1,6 @@
 import type { IProvider } from '@/common/config/storage';
 import ModalHOC from '@/renderer/utils/ui/ModalHOC';
-import { Form, Input, Message, Select, Tag } from '@arco-design/web-react';
+import { Form, Input, Message, Select, Switch, Tag } from '@arco-design/web-react';
 import React, { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import AionModal from '@/renderer/components/base/AionModal';
@@ -9,12 +9,15 @@ import useModeModeList from '@renderer/hooks/agent/useModeModeList';
 import { getProviderLogo } from '@/renderer/utils/model/modelPlatforms';
 import { ProviderLogo } from '@/renderer/components/agent/ThemedLogo';
 
-const EditModeModal = ModalHOC<{ data?: IProvider; onChange(data: IProvider): void }>(
+type EditableProvider = IProvider & { clear_api_key?: boolean };
+
+const EditModeModal = ModalHOC<{ data?: IProvider; onChange(data: EditableProvider): void }>(
   ({ modalProps, modalCtrl, ...props }) => {
     const { t } = useTranslation();
     const { data } = props;
     const [form] = Form.useForm();
     const [message, messageContext] = Message.useMessage();
+    const [clearApiKey, setClearApiKey] = useState(false);
 
     // Watch bedrockAuthMethod only for UI conditional rendering (not for auto-refresh)
     const bedrockAuthMethod = Form.useWatch('bedrockAuthMethod', form);
@@ -28,6 +31,7 @@ const EditModeModal = ModalHOC<{ data?: IProvider; onChange(data: IProvider): vo
     const watchedApiKey = Form.useWatch('api_key', form);
     const effectiveBaseUrl = watchedBaseUrl ?? data?.base_url;
     const effectiveApiKey = watchedApiKey ?? data?.api_key;
+    const hasStoredApiKey = data?.has_api_key === true;
 
     // 获取供应商 Logo / Get provider logo
     const providerLogo = useMemo(() => {
@@ -114,6 +118,7 @@ const EditModeModal = ModalHOC<{ data?: IProvider; onChange(data: IProvider): vo
       if (data) {
         form.setFieldsValue({
           ...data,
+          api_key: '',
           model:
             data.models && data.models.length > 0
               ? data.models.length === 1
@@ -139,12 +144,14 @@ const EditModeModal = ModalHOC<{ data?: IProvider; onChange(data: IProvider): vo
         onOk={async () => {
           try {
             const values = await form.validate();
-            const updatedProvider: IProvider = {
+            const updatedProvider: EditableProvider = {
               ...data,
               ...values,
               // Ensure models is always an array
               models: Array.isArray(values.model) ? values.model : [values.model],
+              clear_api_key: clearApiKey || undefined,
             };
+            if (!values.api_key && hasStoredApiKey) delete (updatedProvider as Partial<IProvider>).api_key;
 
             // Add Bedrock configuration if platform is Bedrock
             if (isBedrock) {
@@ -217,12 +224,33 @@ const EditModeModal = ModalHOC<{ data?: IProvider; onChange(data: IProvider): vo
             <Form.Item
               hidden={isBedrock}
               label={t('settings.apiKey')}
-              required={!isBedrock}
-              rules={[{ required: !isBedrock }]}
+              required={!isBedrock && !hasStoredApiKey}
+              rules={[{ required: !isBedrock && !hasStoredApiKey && !clearApiKey }]}
               field={'api_key'}
-              extra={<div className='text-11px text-t-secondary mt-2'>💡 {t('settings.multiApiKeyEditTip')}</div>}
+              extra={
+                <div className='flex flex-col gap-8px text-11px text-t-secondary mt-2'>
+                  <span>{hasStoredApiKey ? t('settings.apiKeyStoredHint') : t('settings.multiApiKeyEditTip')}</span>
+                  {hasStoredApiKey && (
+                    <label className='inline-flex items-center gap-8px w-fit'>
+                      <Switch
+                        size='small'
+                        checked={clearApiKey}
+                        onChange={(checked) => {
+                          setClearApiKey(checked);
+                          if (checked) form.setFieldValue('api_key', '');
+                        }}
+                      />
+                      <span>{t('settings.apiKeyClear')}</span>
+                    </label>
+                  )}
+                </div>
+              }
             >
-              <Input.TextArea rows={4} placeholder={t('settings.apiKeyPlaceholder')} />
+              <Input.Password
+                visibilityToggle
+                disabled={clearApiKey}
+                placeholder={hasStoredApiKey ? t('settings.apiKeyKeepPlaceholder') : t('settings.apiKeyPlaceholder')}
+              />
             </Form.Item>
 
             {/* AWS Bedrock Authentication Method */}

@@ -1358,6 +1358,14 @@
     "solveWithButler": "از باتلر بپرس"
   },
   "providerIdConflict": "شناسه ارائه‌دهنده از قبل وجود دارد. دوباره تلاش کنید.",
+  "dshProviderSelected": "ارائه‌دهنده DeepSeek Harness به‌روزرسانی شد.",
+  "dshProviderSelectFailed": "به‌روزرسانی ارائه‌دهنده DeepSeek Harness ممکن نبود.",
+  "dshProviderDefault": "پیش‌فرض DSH",
+  "dshProviderSetDefaultTooltip": "استفاده از این ارائه‌دهنده در حالت‌های اداری، کدنویسی و پژوهش",
+  "dshProviderUnsupportedTooltip": "DeepSeek Harness در حال حاضر فقط Base URL سازگار با OpenAI را پشتیبانی می‌کند",
+  "apiKeyStoredHint": "کلید API به‌صورت امن ذخیره شده است. برای حفظ آن این فیلد را خالی بگذارید.",
+  "apiKeyKeepPlaceholder": "برای حفظ کلید API ذخیره‌شده خالی بگذارید",
+  "apiKeyClear": "پاک کردن کلید API ذخیره‌شده هنگام ذخیره",
   "autoInjectedSkillsHint": "در هر گفتگو به‌طور خودکار بارگذاری می‌شوند — نیازی به فعال‌سازی نیست؛ عامل تصمیم می‌گیرد چه زمانی از آن‌ها استفاده کند.",
   "browserData": {
     "title": "مرورگر درون‌برنامه",

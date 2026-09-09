@@ -1358,6 +1358,14 @@
     "solveWithButler": "Preguntar al Mayordomo"
   },
   "providerIdConflict": "El ID del proveedor ya existe. Inténtalo de nuevo.",
+  "dshProviderSelected": "Se actualizó el proveedor de DeepSeek Harness.",
+  "dshProviderSelectFailed": "No se pudo actualizar el proveedor de DeepSeek Harness.",
+  "dshProviderDefault": "Predeterminado DSH",
+  "dshProviderSetDefaultTooltip": "Usar este proveedor en los modos oficina, programación e investigación",
+  "dshProviderUnsupportedTooltip": "DeepSeek Harness solo admite actualmente Base URL compatibles con OpenAI",
+  "apiKeyStoredHint": "Hay una clave API guardada de forma segura. Déjalo vacío para conservarla.",
+  "apiKeyKeepPlaceholder": "Déjalo vacío para conservar la clave API guardada",
+  "apiKeyClear": "Eliminar la clave API guardada al guardar",
   "autoInjectedSkillsHint": "Se cargan automáticamente en cada conversación: no hace falta activarlas; el agente decide cuándo usarlas.",
   "browserData": {
     "title": "Navegador integrado",

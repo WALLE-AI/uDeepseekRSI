@@ -46,6 +46,7 @@ export interface UpdateProviderRequest {
   name?: string;
   base_url?: string;
   api_key?: string;
+  clear_api_key?: boolean;
   models?: string[];
   enabled?: boolean;
   capabilities?: ModelCapability[];
@@ -57,6 +58,11 @@ export interface UpdateProviderRequest {
   bedrock_config?: IProvider['bedrock_config'];
   is_full_url?: boolean;
 }
+
+export type DefaultDshProviderResponse = {
+  provider_id: string | null;
+  source: 'ui' | 'environment' | 'official';
+};
 
 /**
  * Response for `POST /api/providers/:id/models` and

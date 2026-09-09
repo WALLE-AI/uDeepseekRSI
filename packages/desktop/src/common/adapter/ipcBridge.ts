@@ -45,6 +45,7 @@ import type {
   CreateProviderRequest,
   FetchModelsAnonymousRequest,
   FetchModelsResponse,
+  DefaultDshProviderResponse,
   ProviderHealthCheckRequest,
   ProviderHealthCheckResponse,
   UpdateProviderRequest,
@@ -1139,6 +1140,8 @@ export const mode = {
    */
   fetchModelList: httpPost<FetchModelsResponse, FetchModelsAnonymousRequest>('/api/providers/fetch-models'),
   detectProtocol: httpPost<ProtocolDetectionResponse, ProtocolDetectionRequest>('/api/providers/detect-protocol'),
+  getDefaultDshProvider: httpGet<DefaultDshProviderResponse, void>('/api/providers/default'),
+  setDefaultDshProvider: httpPut<DefaultDshProviderResponse, { provider_id: string | null }>('/api/providers/default'),
 };
 
 // ---------------------------------------------------------------------------

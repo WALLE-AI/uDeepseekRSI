@@ -524,6 +524,10 @@ export interface IProvider {
   name: string;
   base_url: string;
   api_key: string;
+  /** True when the backend has a stored key that is intentionally not returned. */
+  has_api_key?: boolean;
+  /** Optional non-secret suffix for identifying the configured key. */
+  api_key_hint?: string;
   models: string[];
   /**
    * 模型能力标签列表。打了标签就是支持，没打就是不支持

@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   close: vi.fn(),
   createProvider: vi.fn(),
   deleteProvider: vi.fn(),
+  getDefaultDshProvider: vi.fn(),
   editModeOpen: vi.fn(),
   availableModels: [
     { label: 'GPT 5.6 Sol', value: 'gpt-5.6-sol' },
@@ -27,6 +28,7 @@ const mocks = vi.hoisted(() => ({
   protocolReset: vi.fn(),
   singleModelValue: false,
   updateProvider: vi.fn(),
+  setDefaultDshProvider: vi.fn(),
 }));
 
 function MockSelectOption({ children, value }: { children?: React.ReactNode; value: string }) {
@@ -87,11 +89,17 @@ vi.mock('@/common', () => ({
       fetchModelList: {
         invoke: vi.fn(),
       },
+      getDefaultDshProvider: {
+        invoke: mocks.getDefaultDshProvider,
+      },
       listProviders: {
         invoke: vi.fn(),
       },
       updateProvider: {
         invoke: mocks.updateProvider,
+      },
+      setDefaultDshProvider: {
+        invoke: mocks.setDefaultDshProvider,
       },
     },
   },
@@ -599,6 +607,17 @@ describe('configured model list', () => {
   beforeEach(() => {
     mocks.providers.splice(0, mocks.providers.length, configuredProvider);
     mocks.updateProvider.mockResolvedValue(configuredProvider);
+    mocks.getDefaultDshProvider.mockResolvedValue({ provider_id: 'provider-1', source: 'ui' });
+    mocks.setDefaultDshProvider.mockResolvedValue({ provider_id: 'provider-1', source: 'ui' });
+  });
+
+  it('marks the provider selected for DeepSeek Harness without exposing its key', async () => {
+    mocks.providers[0] = { ...configuredProvider, api_key: '', has_api_key: true };
+
+    render(<ModelModalContent />);
+
+    expect(await screen.findByText('settings.dshProviderDefault')).toBeInTheDocument();
+    expect(screen.queryByText('secret-provider-key')).not.toBeInTheDocument();
   });
 
   it('shows explicit and automatic Vision and API mode states', () => {

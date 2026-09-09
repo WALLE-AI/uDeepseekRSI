@@ -1,9 +1,11 @@
 import { existsSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
 import { join, resolve } from 'node:path';
 import { DshApiServer } from '@udeepseekrsi/dsh-bridge';
 import { BUILTIN_BROWSER_MCP_NAME } from '@/common/config/constants';
 import { getBuiltinMcpScriptPath } from '../utils/initStorage';
 import { createDesktopShell } from './desktopShell';
+import { SafeStorageProviderCredentialStore } from './providerCredentialStore';
 
 type DirectBackendStatus = 'stopped' | 'starting' | 'running' | 'error';
 
@@ -19,6 +21,7 @@ export class DirectBackendManager {
   #server: DshApiServer | null = null;
   #status: DirectBackendStatus = 'stopped';
   #port: number | null = null;
+  #authToken: string | null = null;
 
   get status(): DirectBackendStatus {
     return this.#status;
@@ -26,6 +29,10 @@ export class DirectBackendManager {
 
   get port(): number | null {
     return this.#port;
+  }
+
+  get authToken(): string | null {
+    return this.#authToken;
   }
 
   async start(
@@ -38,6 +45,7 @@ export class DirectBackendManager {
   ): Promise<number> {
     if (this.#server && this.#port) return this.#port;
     this.#status = 'starting';
+    const authToken = randomBytes(32).toString('base64url');
     const configuredPatch = process.env.DSH_PATCH_PATH?.trim();
     const patchCandidates = [
       configuredPatch,
@@ -72,12 +80,15 @@ export class DirectBackendManager {
       env: process.env,
       mcpServers,
       desktopShell: createDesktopShell(),
+      credentialStore: new SafeStorageProviderCredentialStore(join(dataDir, 'provider-credentials.json')),
+      authToken,
     });
     try {
       const port = await server.start();
       this.#server = server;
       this.#port = port;
       this.#status = 'running';
+      this.#authToken = authToken;
       await callbacks?.onReady?.(port);
       return port;
     } catch (error) {
@@ -91,6 +102,7 @@ export class DirectBackendManager {
     const server = this.#server;
     this.#server = null;
     this.#port = null;
+    this.#authToken = null;
     this.#status = 'stopped';
     await server?.stop();
   }

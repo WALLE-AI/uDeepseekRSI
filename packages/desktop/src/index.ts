@@ -225,6 +225,10 @@ ipcMain.on('get-backend-port', (event) => {
   event.returnValue = backendManager.port;
 });
 
+ipcMain.on('get-backend-token', (event) => {
+  event.returnValue = backendManager.authToken;
+});
+
 ipcMain.on('get-initial-language', (event) => {
   event.returnValue = rendererInitialLanguage;
 });
@@ -356,6 +360,8 @@ function exposeBackendPort(backendPort: number): void {
   // ipcBridge.* invoke from the main process — the renderer side reads
   // window.__backendPort via preload, but main has no `window`.
   (globalThis as typeof globalThis & { __backendPort?: number }).__backendPort = backendPort;
+  (globalThis as typeof globalThis & { __backendToken?: string }).__backendToken =
+    backendManager.authToken ?? undefined;
 }
 
 function ensureAdminUserOnce(backendPort: number): Promise<void> {
@@ -948,6 +954,7 @@ const handleAppReady = async (): Promise<void> => {
           workDir: sysDirWebUI.workDir,
           logDir: sysDirWebUI.logDir,
         },
+        backendToken: backendManager.authToken ?? undefined,
         backend: {
           kind: 'useExistingBackend',
           port: (() => {

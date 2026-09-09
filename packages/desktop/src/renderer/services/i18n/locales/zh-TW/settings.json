@@ -1360,6 +1360,14 @@
     "solveWithButler": "找管家排查"
   },
   "providerIdConflict": "Provider ID 已存在，請重試。",
+  "dshProviderSelected": "DeepSeek Harness Provider 已更新。",
+  "dshProviderSelectFailed": "無法更新 DeepSeek Harness Provider。",
+  "dshProviderDefault": "DSH 預設",
+  "dshProviderSetDefaultTooltip": "將此 Provider 用於辦公、編碼和研究模式",
+  "dshProviderUnsupportedTooltip": "DeepSeek Harness 目前僅支援 OpenAI 相容的 Base URL",
+  "apiKeyStoredHint": "API Key 已安全儲存，留空將保留現有金鑰。",
+  "apiKeyKeepPlaceholder": "留空以保留已儲存的 API Key",
+  "apiKeyClear": "儲存時清除已儲存的 API Key",
   "autoInjectedSkillsHint": "每次對話都會自動載入，無需手動啟用；由智能體自行決定何時呼叫。",
   "browserData": {
     "title": "應用內瀏覽器",

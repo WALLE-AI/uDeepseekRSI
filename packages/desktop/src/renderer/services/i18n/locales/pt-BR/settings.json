@@ -1361,6 +1361,14 @@
     "solveWithButler": "Perguntar ao Mordomo"
   },
   "providerIdConflict": "O Provider ID já existe. Tente novamente.",
+  "dshProviderSelected": "O provedor do DeepSeek Harness foi atualizado.",
+  "dshProviderSelectFailed": "Não foi possível atualizar o provedor do DeepSeek Harness.",
+  "dshProviderDefault": "Padrão do DSH",
+  "dshProviderSetDefaultTooltip": "Usar este provedor nos modos escritório, codificação e pesquisa",
+  "dshProviderUnsupportedTooltip": "O DeepSeek Harness atualmente aceita apenas Base URLs compatíveis com OpenAI",
+  "apiKeyStoredHint": "Uma chave de API está armazenada com segurança. Deixe em branco para mantê-la.",
+  "apiKeyKeepPlaceholder": "Deixe em branco para manter a chave de API armazenada",
+  "apiKeyClear": "Remover a chave de API armazenada ao salvar",
   "autoInjectedSkillsHint": "Carregadas automaticamente em cada conversa — não é preciso ativá-las; o agente decide quando usá-las.",
   "browserData": {
     "title": "Navegador interno",

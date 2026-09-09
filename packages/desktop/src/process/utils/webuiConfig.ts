@@ -256,6 +256,7 @@ export async function startDesktopWebUI(opts: { port?: number; allowRemote?: boo
       workDir: sysDir.workDir,
       logDir: sysDir.logDir,
     },
+    backendToken: (globalThis as typeof globalThis & { __backendToken?: string }).__backendToken,
     backend: {
       kind: 'useExistingBackend',
       port: backendPort,

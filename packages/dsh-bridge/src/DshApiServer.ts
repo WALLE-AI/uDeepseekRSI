@@ -89,12 +89,63 @@ type StoredMessage = {
   backend_turn_id?: string;
 };
 
+type StoredProvider = {
+  id: string;
+  platform: string;
+  name: string;
+  base_url: string;
+  models: string[];
+  enabled?: boolean;
+  capabilities?: unknown[];
+  context_limit?: number;
+  model_protocols?: Record<string, string>;
+  model_enabled?: Record<string, boolean>;
+  model_health?: Record<string, unknown>;
+  model_settings?: Record<string, unknown>;
+  is_full_url?: boolean;
+};
+
+export type ProviderCredentialStore = {
+  get(providerId: string): Promise<string | undefined>;
+  set(providerId: string, apiKey: string): Promise<void>;
+  delete(providerId: string): Promise<void>;
+};
+
+class MemoryProviderCredentialStore implements ProviderCredentialStore {
+  readonly #keys = new Map<string, string>();
+
+  async get(providerId: string): Promise<string | undefined> {
+    return this.#keys.get(providerId);
+  }
+
+  async set(providerId: string, apiKey: string): Promise<void> {
+    this.#keys.set(providerId, apiKey);
+  }
+
+  async delete(providerId: string): Promise<void> {
+    this.#keys.delete(providerId);
+  }
+}
+
+class DshApiError extends Error {
+  readonly status: number;
+  readonly code: string;
+
+  constructor(status: number, code: string, message = code) {
+    super(message);
+    this.status = status;
+    this.code = code;
+  }
+}
+
 type PersistedState = {
   conversations: StoredConversation[];
   messages: Record<string, StoredMessage[]>;
   clientSettings: Record<string, unknown>;
   projects: StoredProject[];
   workspaceBindings: WorkspaceBinding[];
+  providers: StoredProvider[];
+  defaultProviderId: string | null;
 };
 
 type ActiveTurn = { turnId: string; messageId: string; text: string; startedAt: number };
@@ -115,6 +166,8 @@ export type DshApiServerOptions = {
   mcpServers?: readonly DshMcpServer[];
   desktopShell?: DesktopShellPort;
   officePreviewPort?: OfficePreviewPort;
+  credentialStore?: ProviderCredentialStore;
+  authToken?: string;
   agentPortFactory?: (
     handlers: {
       onUpdate: (update: BridgeUpdate) => void;
@@ -147,6 +200,98 @@ function modelCatalogEndpoint(baseUrl: string): string {
 
 function gatewayBaseUrl(env: NodeJS.ProcessEnv): string | undefined {
   return env.DEEPSEEK_URL?.trim() || env.DEEPSEEK_BASE_URL?.trim() || undefined;
+}
+
+function normalizeBaseUrl(value: unknown): string {
+  if (typeof value !== 'string' || !value.trim()) {
+    throw new DshApiError(400, 'PROVIDER_BASE_URL_INVALID', 'A Base URL is required.');
+  }
+  let url: URL;
+  try {
+    url = new URL(value.trim());
+  } catch {
+    throw new DshApiError(400, 'PROVIDER_BASE_URL_INVALID', 'The Base URL is invalid.');
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    throw new DshApiError(400, 'PROVIDER_BASE_URL_INVALID', 'Only HTTP and HTTPS provider URLs are supported.');
+  }
+  if (url.username || url.password) {
+    throw new DshApiError(400, 'PROVIDER_BASE_URL_INVALID', 'Credentials must not be embedded in the Base URL.');
+  }
+  url.search = '';
+  url.hash = '';
+  url.pathname = url.pathname.replace(/\/+$/, '');
+  return url.toString().replace(/\/$/, '');
+}
+
+function stringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => (typeof item === 'string' ? item.trim() : ''))
+    .filter((item, index, values) => Boolean(item) && values.indexOf(item) === index);
+}
+
+function normalizeProvider(body: Record<string, unknown>, existing?: StoredProvider): StoredProvider {
+  const id = typeof body.id === 'string' && body.id.trim() ? body.id.trim() : existing?.id || randomUUID();
+  const platform =
+    typeof body.platform === 'string' && body.platform.trim() ? body.platform.trim() : existing?.platform || 'custom';
+  const name = typeof body.name === 'string' && body.name.trim() ? body.name.trim() : existing?.name;
+  if (!name) throw new DshApiError(400, 'PROVIDER_NAME_REQUIRED', 'A provider name is required.');
+  const baseUrl = body.base_url === undefined ? existing?.base_url : normalizeBaseUrl(body.base_url);
+  if (!baseUrl) throw new DshApiError(400, 'PROVIDER_BASE_URL_INVALID', 'A Base URL is required.');
+  const models = body.models === undefined ? (existing?.models ?? []) : stringArray(body.models);
+  return {
+    id,
+    platform,
+    name,
+    base_url: baseUrl,
+    models,
+    enabled: typeof body.enabled === 'boolean' ? body.enabled : existing?.enabled,
+    capabilities: Array.isArray(body.capabilities) ? body.capabilities : existing?.capabilities,
+    context_limit: typeof body.context_limit === 'number' ? body.context_limit : existing?.context_limit,
+    model_protocols:
+      body.model_protocols && typeof body.model_protocols === 'object'
+        ? (body.model_protocols as Record<string, string>)
+        : existing?.model_protocols,
+    model_enabled:
+      body.model_enabled && typeof body.model_enabled === 'object'
+        ? (body.model_enabled as Record<string, boolean>)
+        : existing?.model_enabled,
+    model_health:
+      body.model_health && typeof body.model_health === 'object'
+        ? (body.model_health as Record<string, unknown>)
+        : existing?.model_health,
+    model_settings:
+      body.model_settings && typeof body.model_settings === 'object'
+        ? (body.model_settings as Record<string, unknown>)
+        : existing?.model_settings,
+    is_full_url: typeof body.is_full_url === 'boolean' ? body.is_full_url : existing?.is_full_url,
+  };
+}
+
+function assertDshCompatibleProvider(provider: StoredProvider, apiKey: string | undefined): void {
+  if (provider.is_full_url) {
+    throw new DshApiError(
+      400,
+      'DSH_PROVIDER_PROTOCOL_UNSUPPORTED',
+      'DeepSeek Harness requires a Base URL instead of a full completion URL.'
+    );
+  }
+  if (!['custom', 'new-api', 'openai'].includes(provider.platform.toLowerCase())) {
+    throw new DshApiError(
+      400,
+      'DSH_PROVIDER_PROTOCOL_UNSUPPORTED',
+      'DeepSeek Harness currently supports OpenAI-compatible providers only.'
+    );
+  }
+  if (!apiKey?.trim()) throw new DshApiError(400, 'PROVIDER_API_KEY_REQUIRED', 'An API Key is required.');
+  if (apiKey.split(/[,\n]/).filter((key) => key.trim()).length !== 1) {
+    throw new DshApiError(
+      400,
+      'DSH_PROVIDER_MULTIPLE_KEYS_UNSUPPORTED',
+      'DeepSeek Harness requires exactly one API Key.'
+    );
+  }
 }
 
 function toDshModelValue(providerId: string, modelId: string): string {
@@ -203,9 +348,8 @@ function extractText(payload: unknown): string {
 
 function responseData(response: ServerResponse, data: unknown, status = 200): void {
   response.writeHead(status, {
-    'Access-Control-Allow-Headers': 'Content-Type',
+    'Access-Control-Allow-Headers': 'Content-Type, X-AionUI-Backend-Token',
     'Access-Control-Allow-Methods': 'GET,POST,PUT,PATCH,DELETE,OPTIONS',
-    'Access-Control-Allow-Origin': '*',
     'Content-Type': 'application/json; charset=utf-8',
   });
   const payload =
@@ -213,6 +357,24 @@ function responseData(response: ServerResponse, data: unknown, status = 200): vo
       ? { success: true, data }
       : { success: false, ...(data && typeof data === 'object' ? data : { error: String(data) }) };
   response.end(JSON.stringify(payload));
+}
+
+function allowRendererOrigin(request: IncomingMessage, response: ServerResponse): void {
+  const origin = request.headers.origin;
+  if (!origin) return;
+  if (origin === 'null') {
+    response.setHeader('Access-Control-Allow-Origin', origin);
+    return;
+  }
+  try {
+    const url = new URL(origin);
+    if ((url.protocol === 'http:' || url.protocol === 'https:') && ['127.0.0.1', 'localhost'].includes(url.hostname)) {
+      response.setHeader('Access-Control-Allow-Origin', origin);
+      response.setHeader('Vary', 'Origin');
+    }
+  } catch {
+    // Invalid and untrusted origins receive no CORS permission.
+  }
 }
 
 async function readJsonBody(request: IncomingMessage): Promise<Record<string, unknown>> {
@@ -266,6 +428,8 @@ export class DshApiServer {
     clientSettings: {},
     projects: [],
     workspaceBindings: [],
+    providers: [],
+    defaultProviderId: null,
   };
   #bridge: DshRuntimePool | null = null;
   #server: Server | null = null;
@@ -275,10 +439,14 @@ export class DshApiServer {
   #models: ModelCatalogEntry[] = [{ id: DEFAULT_MODEL_ID, label: DEFAULT_MODEL_ID }];
   #officePreview: OfficePreviewPort;
   #providerId: string;
+  #runtimeEnv: NodeJS.ProcessEnv;
+  readonly #credentialStore: ProviderCredentialStore;
 
   constructor(options: DshApiServerOptions) {
     this.#options = options;
-    this.#providerId = gatewayBaseUrl(options.env ?? process.env) ? GATEWAY_DSH_PROVIDER_ID : DEFAULT_DSH_PROVIDER_ID;
+    this.#runtimeEnv = { ...(options.env ?? process.env) };
+    this.#providerId = gatewayBaseUrl(this.#runtimeEnv) ? GATEWAY_DSH_PROVIDER_ID : DEFAULT_DSH_PROVIDER_ID;
+    this.#credentialStore = options.credentialStore ?? new MemoryProviderCredentialStore();
     this.#officePreview =
       options.officePreviewPort ??
       new OfficePreviewService({
@@ -296,31 +464,15 @@ export class DshApiServer {
     if (this.#server) return this.#port;
     await this.#load();
     await this.#alignStoredWorkspaces();
+    await this.#resolveRuntimeProvider();
     await this.#loadModelCatalog();
     this.#normalizeStoredModels();
-    const handlers = {
-      onUpdate: (update: BridgeUpdate) => this.#handleUpdate(update),
-      onPermissionRequest: (request: BridgePermissionRequest) => this.#requestPermission(request),
-    };
-    this.#bridge = new DshRuntimePool({
-      createPort: (mode) =>
-        this.#options.agentPortFactory
-          ? this.#options.agentPortFactory(handlers, mode)
-          : createDshConnection({
-              cwd: this.#options.cwd,
-              dshHome: mode === 'coding' ? this.#options.dshHome : join(this.#options.dshHome, 'modes', mode),
-              patchPaths: this.#options.patchPaths,
-              mcpServers: this.#options.mcpServers,
-              env: {
-                ...this.#options.env,
-                AIONUI_DEEPSEEK_MODELS_JSON: JSON.stringify(this.#models.map((model) => model.id)),
-                AIONUI_DSH_PERSONA: personaForDshWorkMode(mode),
-              },
-              ...handlers,
-            }),
-    });
+    this.#bridge = this.#createRuntimePool();
 
-    const server = createServer((request, response) => void this.#route(request, response));
+    const server = createServer((request, response) => {
+      allowRendererOrigin(request, response);
+      void this.#route(request, response);
+    });
     const wsServer = new WebSocketServer({ noServer: true });
     server.on('upgrade', (request, socket, head) => {
       if (new URL(request.url ?? '/', 'http://localhost').pathname !== '/ws') {
@@ -348,6 +500,30 @@ export class DshApiServer {
     this.#server = server;
     this.#wsServer = wsServer;
     return this.#port;
+  }
+
+  #createRuntimePool(): DshRuntimePool {
+    const handlers = {
+      onUpdate: (update: BridgeUpdate) => this.#handleUpdate(update),
+      onPermissionRequest: (request: BridgePermissionRequest) => this.#requestPermission(request),
+    };
+    return new DshRuntimePool({
+      createPort: (mode) =>
+        this.#options.agentPortFactory
+          ? this.#options.agentPortFactory(handlers, mode)
+          : createDshConnection({
+              cwd: this.#options.cwd,
+              dshHome: mode === 'coding' ? this.#options.dshHome : join(this.#options.dshHome, 'modes', mode),
+              patchPaths: this.#options.patchPaths,
+              mcpServers: this.#options.mcpServers,
+              env: {
+                ...this.#runtimeEnv,
+                AIONUI_DEEPSEEK_MODELS_JSON: JSON.stringify(this.#models.map((model) => model.id)),
+                AIONUI_DSH_PERSONA: personaForDshWorkMode(mode),
+              },
+              ...handlers,
+            }),
+    });
   }
 
   async stop(): Promise<void> {
@@ -397,13 +573,23 @@ export class DshApiServer {
         clientSettings: parsed.clientSettings && typeof parsed.clientSettings === 'object' ? parsed.clientSettings : {},
         projects: Array.isArray(parsed.projects) ? parsed.projects : [],
         workspaceBindings: Array.isArray(parsed.workspaceBindings) ? parsed.workspaceBindings : [],
+        providers: Array.isArray(parsed.providers) ? parsed.providers : [],
+        defaultProviderId: typeof parsed.defaultProviderId === 'string' ? parsed.defaultProviderId : null,
       };
       for (const conversation of this.#state.conversations) {
         conversation.runtime = idleRuntime();
         conversation.status = 'finished';
       }
     } catch {
-      this.#state = { conversations: [], messages: {}, clientSettings: {}, projects: [], workspaceBindings: [] };
+      this.#state = {
+        conversations: [],
+        messages: {},
+        clientSettings: {},
+        projects: [],
+        workspaceBindings: [],
+        providers: [],
+        defaultProviderId: null,
+      };
     }
   }
 
@@ -481,7 +667,7 @@ export class DshApiServer {
   }
 
   async #loadModelCatalog(): Promise<void> {
-    const env = this.#options.env ?? process.env;
+    const env = this.#runtimeEnv;
     const baseUrl = gatewayBaseUrl(env);
     if (!baseUrl) return;
 
@@ -506,6 +692,105 @@ export class DshApiServer {
         `[dsh-bridge] Could not load /v1/models; using ${DEFAULT_MODEL_ID}: ${error instanceof Error ? error.message : String(error)}`
       );
     }
+  }
+
+  async #resolveRuntimeProvider(): Promise<void> {
+    const baseEnv = { ...(this.#options.env ?? process.env) };
+    const provider = this.#state.providers.find(
+      (candidate) => candidate.id === this.#state.defaultProviderId && candidate.enabled !== false
+    );
+    if (!provider) {
+      this.#runtimeEnv = baseEnv;
+      this.#providerId = gatewayBaseUrl(baseEnv) ? GATEWAY_DSH_PROVIDER_ID : DEFAULT_DSH_PROVIDER_ID;
+      return;
+    }
+    const apiKey = await this.#credentialStore.get(provider.id);
+    assertDshCompatibleProvider(provider, apiKey);
+    if (provider.models.length > 0) {
+      this.#models = provider.models.map((id) => ({ id, label: id }));
+    }
+    this.#runtimeEnv = {
+      ...baseEnv,
+      DEEPSEEK_URL: provider.base_url,
+      DEEPSEEK_BASE_URL: provider.base_url,
+      DEEPSEEK_API_KEY: apiKey,
+      AIONUI_DEEPSEEK_MODELS_JSON: JSON.stringify(provider.models),
+    };
+    this.#providerId = GATEWAY_DSH_PROVIDER_ID;
+  }
+
+  async #reloadRuntimeProvider(): Promise<void> {
+    if (this.#activeTurns.size > 0) {
+      throw new DshApiError(
+        409,
+        'PROVIDER_IN_USE',
+        'Wait for the current response to finish before switching providers.'
+      );
+    }
+    await this.#resolveRuntimeProvider();
+    const selected = this.#state.providers.find((provider) => provider.id === this.#state.defaultProviderId);
+    this.#models = selected?.models.length
+      ? selected.models.map((id) => ({ id, label: id }))
+      : [{ id: DEFAULT_MODEL_ID, label: DEFAULT_MODEL_ID }];
+    await this.#loadModelCatalog();
+    const previous = this.#bridge;
+    this.#bridge = null;
+    await previous?.dispose();
+    this.#bridge = this.#createRuntimePool();
+    this.#normalizeStoredModels();
+  }
+
+  async #fetchProviderModels(baseUrl: string, apiKey: string): Promise<ModelCatalogEntry[]> {
+    const response = await fetch(modelCatalogEndpoint(baseUrl), {
+      headers: { Authorization: `Bearer ${apiKey}` },
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!response.ok) {
+      const code = response.status === 401 ? 'PROVIDER_UNAUTHORIZED' : `PROVIDER_HTTP_${response.status}`;
+      throw new DshApiError(response.status, code, `Provider returned HTTP ${response.status}.`);
+    }
+    const payload = (await response.json()) as { data?: Array<{ id?: unknown; name?: unknown }> };
+    const models = Array.isArray(payload.data)
+      ? payload.data
+          .map((model) => {
+            const id = typeof model.id === 'string' ? model.id.trim() : '';
+            const label = typeof model.name === 'string' && model.name.trim() ? model.name.trim() : id;
+            return { id, label };
+          })
+          .filter(
+            (model, index, values) => Boolean(model.id) && values.findIndex((item) => item.id === model.id) === index
+          )
+      : [];
+    if (models.length === 0) {
+      throw new DshApiError(502, 'PROVIDER_MODELS_INVALID', 'The provider returned no usable models.');
+    }
+    return models;
+  }
+
+  async #publicProvider(provider: StoredProvider): Promise<Record<string, unknown>> {
+    const apiKey = await this.#credentialStore.get(provider.id);
+    return {
+      ...provider,
+      api_key: '',
+      has_api_key: Boolean(apiKey),
+      api_key_hint: apiKey ? `...${apiKey.slice(-4)}` : undefined,
+    };
+  }
+
+  #assertProviderAccess(request: IncomingMessage): void {
+    const expected = this.#options.authToken;
+    if (!expected) return;
+    if (request.headers['x-aionui-backend-token'] !== expected) {
+      throw new DshApiError(401, 'BACKEND_AUTH_REQUIRED', 'Backend authorization is required.');
+    }
+  }
+
+  #defaultProviderResponse(): { provider_id: string | null; source: 'ui' | 'environment' | 'official' } {
+    if (this.#state.defaultProviderId) return { provider_id: this.#state.defaultProviderId, source: 'ui' };
+    return {
+      provider_id: null,
+      source: gatewayBaseUrl(this.#options.env ?? process.env) ? 'environment' : 'official',
+    };
   }
 
   #normalizeStoredModels(): void {
@@ -962,6 +1247,169 @@ export class DshApiServer {
         Object.assign(this.#state.clientSettings, body);
         await this.#persist();
         responseData(response, true);
+        return;
+      }
+      if (path.startsWith('/api/providers') || path === '/api/agents/provider-health-check') {
+        this.#assertProviderAccess(request);
+      }
+      if (path === '/api/providers/default') {
+        if (method === 'GET') {
+          responseData(response, this.#defaultProviderResponse());
+          return;
+        }
+        if (method === 'PUT') {
+          if (this.#activeTurns.size > 0) {
+            throw new DshApiError(
+              409,
+              'PROVIDER_IN_USE',
+              'Wait for the current response to finish before switching providers.'
+            );
+          }
+          const body = await readJsonBody(request);
+          const providerId = body.provider_id === null ? null : String(body.provider_id ?? '').trim();
+          if (providerId) {
+            const provider = this.#state.providers.find((candidate) => candidate.id === providerId);
+            if (!provider) throw new DshApiError(404, 'PROVIDER_NOT_FOUND');
+            assertDshCompatibleProvider(provider, await this.#credentialStore.get(provider.id));
+          }
+          this.#state.defaultProviderId = providerId || null;
+          await this.#persist();
+          await this.#reloadRuntimeProvider();
+          responseData(response, this.#defaultProviderResponse());
+          return;
+        }
+        throw new DshApiError(405, 'METHOD_NOT_ALLOWED');
+      }
+      if (path === '/api/providers/fetch-models' && method === 'POST') {
+        const body = await readJsonBody(request);
+        const baseUrl = normalizeBaseUrl(body.base_url);
+        const apiKey = typeof body.api_key === 'string' ? body.api_key.split(/[,\n]/)[0]?.trim() : '';
+        if (!apiKey) throw new DshApiError(400, 'PROVIDER_API_KEY_REQUIRED');
+        const models = await this.#fetchProviderModels(baseUrl, apiKey);
+        responseData(response, { models: models.map((model) => ({ id: model.id, name: model.label })) });
+        return;
+      }
+      if (path === '/api/providers/detect-protocol' && method === 'POST') {
+        const body = await readJsonBody(request);
+        const baseUrl = normalizeBaseUrl(body.base_url);
+        const apiKey = typeof body.api_key === 'string' ? body.api_key.split(/[,\n]/)[0]?.trim() : '';
+        if (!apiKey) throw new DshApiError(400, 'PROVIDER_API_KEY_REQUIRED');
+        const models = await this.#fetchProviderModels(baseUrl, apiKey);
+        responseData(response, {
+          success: true,
+          protocol: 'openai',
+          confidence: 1,
+          suggestion: { type: 'none', message: '' },
+          models: models.map((model) => model.id),
+        });
+        return;
+      }
+      if (path === '/api/providers') {
+        if (method === 'GET') {
+          responseData(
+            response,
+            await Promise.all(this.#state.providers.map((provider) => this.#publicProvider(provider)))
+          );
+          return;
+        }
+        if (method === 'POST') {
+          const body = await readJsonBody(request);
+          const provider = normalizeProvider(body);
+          if (this.#state.providers.some((candidate) => candidate.id === provider.id)) {
+            throw new DshApiError(409, 'PROVIDER_ID_CONFLICT');
+          }
+          const apiKey = typeof body.api_key === 'string' ? body.api_key.trim() : '';
+          if (!apiKey) throw new DshApiError(400, 'PROVIDER_API_KEY_REQUIRED');
+          let makeDefault = false;
+          if (!this.#state.defaultProviderId) {
+            try {
+              assertDshCompatibleProvider(provider, apiKey);
+              makeDefault = true;
+            } catch {
+              makeDefault = false;
+            }
+          }
+          if (makeDefault && this.#activeTurns.size > 0) throw new DshApiError(409, 'PROVIDER_IN_USE');
+          await this.#credentialStore.set(provider.id, apiKey);
+          this.#state.providers.push(provider);
+          if (makeDefault) this.#state.defaultProviderId = provider.id;
+          await this.#persist();
+          if (makeDefault) await this.#reloadRuntimeProvider();
+          responseData(response, await this.#publicProvider(provider), 201);
+          return;
+        }
+        throw new DshApiError(405, 'METHOD_NOT_ALLOWED');
+      }
+      const providerModelsMatch = path.match(/^\/api\/providers\/([^/]+)\/models$/);
+      if (providerModelsMatch && method === 'POST') {
+        const provider = this.#state.providers.find(
+          (candidate) => candidate.id === decodeURIComponent(providerModelsMatch[1])
+        );
+        if (!provider) throw new DshApiError(404, 'PROVIDER_NOT_FOUND');
+        const apiKey = await this.#credentialStore.get(provider.id);
+        if (!apiKey) throw new DshApiError(400, 'PROVIDER_API_KEY_REQUIRED');
+        const models = await this.#fetchProviderModels(provider.base_url, apiKey.split(/[,\n]/)[0].trim());
+        provider.models = models.map((model) => model.id);
+        await this.#persist();
+        responseData(response, { models: models.map((model) => ({ id: model.id, name: model.label })) });
+        return;
+      }
+      const providerMatch = path.match(/^\/api\/providers\/([^/]+)$/);
+      if (providerMatch) {
+        const providerId = decodeURIComponent(providerMatch[1]);
+        const index = this.#state.providers.findIndex((provider) => provider.id === providerId);
+        if (index < 0) throw new DshApiError(404, 'PROVIDER_NOT_FOUND');
+        const existing = this.#state.providers[index];
+        const isDefault = providerId === this.#state.defaultProviderId;
+        if ((method === 'PUT' || method === 'DELETE') && isDefault && this.#activeTurns.size > 0) {
+          throw new DshApiError(409, 'PROVIDER_IN_USE');
+        }
+        if (method === 'PUT') {
+          const body = await readJsonBody(request);
+          const provider = normalizeProvider(body, existing);
+          const suppliedKey = typeof body.api_key === 'string' ? body.api_key.trim() : '';
+          const storedKey = await this.#credentialStore.get(providerId);
+          const effectiveKey = suppliedKey || (body.clear_api_key === true ? undefined : storedKey);
+          if (isDefault) assertDshCompatibleProvider(provider, effectiveKey);
+          if (body.clear_api_key === true) await this.#credentialStore.delete(providerId);
+          else if (suppliedKey) await this.#credentialStore.set(providerId, suppliedKey);
+          this.#state.providers[index] = provider;
+          await this.#persist();
+          if (isDefault) await this.#reloadRuntimeProvider();
+          responseData(response, await this.#publicProvider(provider));
+          return;
+        }
+        if (method === 'DELETE') {
+          await this.#credentialStore.delete(providerId);
+          this.#state.providers.splice(index, 1);
+          if (isDefault) this.#state.defaultProviderId = null;
+          await this.#persist();
+          if (isDefault) await this.#reloadRuntimeProvider();
+          responseData(response, null);
+          return;
+        }
+        throw new DshApiError(405, 'METHOD_NOT_ALLOWED');
+      }
+      if (path === '/api/agents/provider-health-check' && method === 'POST') {
+        const body = await readJsonBody(request);
+        const providerId = String(body.provider_id ?? '');
+        const modelId = String(body.model ?? '');
+        const provider = this.#state.providers.find((candidate) => candidate.id === providerId);
+        if (!provider) throw new DshApiError(404, 'PROVIDER_NOT_FOUND');
+        const apiKey = await this.#credentialStore.get(provider.id);
+        if (!apiKey) throw new DshApiError(400, 'PROVIDER_API_KEY_REQUIRED');
+        const startedAt = Date.now();
+        const models = await this.#fetchProviderModels(provider.base_url, apiKey.split(/[,\n]/)[0].trim());
+        const healthy = models.some((model) => model.id === modelId);
+        responseData(response, {
+          provider_id: provider.id,
+          platform: provider.platform,
+          model: modelId,
+          status: healthy ? 'healthy' : 'unhealthy',
+          elapsed_ms: Date.now() - startedAt,
+          message: healthy ? undefined : 'The model was not returned by the provider.',
+          error_kind: healthy ? undefined : 'not_found',
+        });
         return;
       }
       if (path === '/api/agents/management' || path === '/api/agents') {
@@ -1528,7 +1976,6 @@ export class DshApiServer {
         path === '/api/skills' ||
         path === '/api/cron/jobs' ||
         path === '/api/mcp/servers' ||
-        path === '/api/providers' ||
         path === '/api/teams' ||
         path === '/api/extensions/acp-adapters'
       ) {
@@ -1569,6 +2016,10 @@ export class DshApiServer {
         501
       );
     } catch (error) {
+      if (error instanceof DshApiError) {
+        responseData(response, { error: error.message, code: error.code }, error.status);
+        return;
+      }
       if (error instanceof OfficePreviewError) {
         responseData(response, { error: error.message, code: error.code }, 500);
         return;

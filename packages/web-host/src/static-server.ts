@@ -20,6 +20,7 @@ export type StaticServerOptions = {
   backendPort: number;
   port?: number;
   allowRemote?: boolean;
+  backendToken?: string;
 };
 
 export type StaticServerHandle = {
@@ -76,13 +77,17 @@ function getLanIP(): string | null {
   return pickLanIP(networkInterfaces());
 }
 
-function forwardToBackend(req: IncomingMessage, res: ServerResponse, backendPort: number): void {
+function forwardToBackend(req: IncomingMessage, res: ServerResponse, backendPort: number, backendToken?: string): void {
   const options: http.RequestOptions = {
     hostname: '127.0.0.1',
     port: backendPort,
     path: req.url,
     method: req.method,
-    headers: { ...req.headers, host: `127.0.0.1:${backendPort}` },
+    headers: {
+      ...req.headers,
+      host: `127.0.0.1:${backendPort}`,
+      ...(backendToken ? { 'x-aionui-backend-token': backendToken } : {}),
+    },
   };
   const proxy = http.request(options, (proxyRes) => {
     res.writeHead(proxyRes.statusCode ?? 502, proxyRes.headers);
@@ -184,7 +189,7 @@ export async function startStaticServer(opts: StaticServerOptions): Promise<Stat
       // /login and /logout are aionui-auth's top-level auth endpoints: proxy them too
       // so WebUI browser clients reach the backend without a path-rewrite.
       if (req.url.startsWith('/api/') || req.url.startsWith('/api?') || req.url === '/login' || req.url === '/logout') {
-        forwardToBackend(req, res, opts.backendPort);
+        forwardToBackend(req, res, opts.backendPort, opts.backendToken);
         return;
       }
 

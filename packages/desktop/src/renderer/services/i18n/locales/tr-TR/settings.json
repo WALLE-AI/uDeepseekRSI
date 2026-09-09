@@ -1358,6 +1358,14 @@
     "solveWithButler": "Kâhya'ya sor"
   },
   "providerIdConflict": "Provider ID zaten var. Lütfen tekrar deneyin.",
+  "dshProviderSelected": "DeepSeek Harness sağlayıcısı güncellendi.",
+  "dshProviderSelectFailed": "DeepSeek Harness sağlayıcısı güncellenemedi.",
+  "dshProviderDefault": "DSH varsayılanı",
+  "dshProviderSetDefaultTooltip": "Bu sağlayıcıyı ofis, kodlama ve araştırma modlarında kullan",
+  "dshProviderUnsupportedTooltip": "DeepSeek Harness şu anda yalnızca OpenAI uyumlu Base URL'leri destekler",
+  "apiKeyStoredHint": "API anahtarı güvenli şekilde saklanıyor. Korumak için alanı boş bırakın.",
+  "apiKeyKeepPlaceholder": "Saklanan API anahtarını korumak için boş bırakın",
+  "apiKeyClear": "Kaydederken saklanan API anahtarını temizle",
   "autoInjectedSkillsHint": "Her sohbete otomatik olarak yüklenir — etkinleştirmeye gerek yoktur; aracı bunları ne zaman kullanacağına karar verir.",
   "browserData": {
     "title": "Uygulama içi tarayıcı",

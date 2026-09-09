@@ -163,6 +163,27 @@ describe('static-server', () => {
     expect(r.status).toBe(502);
   });
 
+  it('injects the internal backend token while proxying API requests', async () => {
+    let receivedToken = '';
+    const backend = await startMockBackend((req, res) => {
+      receivedToken = String(req.headers['x-aionui-backend-token'] ?? '');
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ success: true }));
+    });
+    stopBackend = backend.close;
+    handle = await startStaticServer({
+      staticDir,
+      backendPort: backend.port,
+      port: 0,
+      backendToken: 'proxy-secret',
+    });
+
+    const response = await fetch(`${handle.localUrl}/api/providers`);
+
+    expect(response.status).toBe(200);
+    expect(receivedToken).toBe('proxy-secret');
+  });
+
   it('/ws WebSocket upgrade is spliced to backend and 101 is relayed', async () => {
     // Mock backend that accepts any WebSocket upgrade and replies with 101.
     // We don't run a real ws protocol — just verify the upgrade response makes

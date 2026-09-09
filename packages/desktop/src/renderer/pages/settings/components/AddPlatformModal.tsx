@@ -540,7 +540,8 @@ const AddPlatformModal = ModalHOC<{
               </div>
             }
           >
-            <Input
+            <Input.Password
+              visibilityToggle
               onBlur={() => {
                 void modelListState.mutate();
               }}

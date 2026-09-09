@@ -15,6 +15,7 @@ import { refreshSession, WS_CLOSE_POLICY_VIOLATION } from './sessionRefresh';
 declare global {
   interface Window {
     __backendPort?: number;
+    __backendToken?: string;
   }
 }
 
@@ -224,6 +225,11 @@ export async function httpRequest<T>(
   options?: HttpRequestOptions
 ): Promise<T> {
   const headers: Record<string, string> = {};
+  const backendToken =
+    typeof window !== 'undefined'
+      ? (window as Window).__backendToken
+      : (globalThis as typeof globalThis & { __backendToken?: string }).__backendToken;
+  if (backendToken) headers['X-AionUI-Backend-Token'] = backendToken;
 
   if (body !== undefined) {
     headers['Content-Type'] = 'application/json';

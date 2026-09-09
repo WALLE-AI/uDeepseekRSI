@@ -1372,6 +1372,14 @@
     "solveWithButler": "Спросить дворецкого"
   },
   "providerIdConflict": "Provider ID уже существует. Повторите попытку.",
+  "dshProviderSelected": "Провайдер DeepSeek Harness обновлён.",
+  "dshProviderSelectFailed": "Не удалось обновить провайдер DeepSeek Harness.",
+  "dshProviderDefault": "По умолчанию для DSH",
+  "dshProviderSetDefaultTooltip": "Использовать этого провайдера в офисном режиме, режиме кодирования и исследования",
+  "dshProviderUnsupportedTooltip": "DeepSeek Harness сейчас поддерживает только Base URL, совместимые с OpenAI",
+  "apiKeyStoredHint": "API-ключ сохранён безопасно. Оставьте поле пустым, чтобы сохранить его.",
+  "apiKeyKeepPlaceholder": "Оставьте пустым, чтобы сохранить API-ключ",
+  "apiKeyClear": "Удалить сохранённый API-ключ при сохранении",
   "autoInjectedSkillsHint": "Автоматически загружаются в каждый диалог — включать не нужно; агент сам решает, когда их использовать.",
   "browserData": {
     "title": "Встроенный браузер",

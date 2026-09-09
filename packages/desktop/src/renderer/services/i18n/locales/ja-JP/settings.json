@@ -1360,6 +1360,14 @@
     "solveWithButler": "執事に相談"
   },
   "providerIdConflict": "Provider ID は既に存在します。もう一度お試しください。",
+  "dshProviderSelected": "DeepSeek Harness プロバイダーを更新しました。",
+  "dshProviderSelectFailed": "DeepSeek Harness プロバイダーを更新できませんでした。",
+  "dshProviderDefault": "DSH デフォルト",
+  "dshProviderSetDefaultTooltip": "このプロバイダーをオフィス、コーディング、研究モードで使用します",
+  "dshProviderUnsupportedTooltip": "DeepSeek Harness は現在 OpenAI 互換の Base URL のみをサポートします",
+  "apiKeyStoredHint": "API キーは安全に保存されています。空欄のままにすると現在のキーを保持します。",
+  "apiKeyKeepPlaceholder": "保存済みの API キーを保持するには空欄にします",
+  "apiKeyClear": "保存時に保存済みの API キーを消去する",
   "autoInjectedSkillsHint": "すべての会話に自動的に読み込まれます。有効化は不要で、エージェントが使用するタイミングを判断します。",
   "browserData": {
     "title": "アプリ内ブラウザー",

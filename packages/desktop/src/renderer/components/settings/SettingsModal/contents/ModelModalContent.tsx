@@ -69,10 +69,13 @@ const getNextProtocol = (current: string): string => {
 };
 
 // Calculate API Key count
-const getApiKeyCount = (api_key: string): number => {
-  if (!api_key) return 0;
-  return api_key.split(/[,\n]/).filter((k) => k.trim().length > 0).length;
+const getApiKeyCount = (provider: IProvider): number => {
+  if (!provider.api_key) return provider.has_api_key ? 1 : 0;
+  return provider.api_key.split(/[,\n]/).filter((k) => k.trim().length > 0).length;
 };
+
+const isDshCompatibleProvider = (provider: IProvider): boolean =>
+  !provider.is_full_url && ['custom', 'new-api', 'openai'].includes(provider.platform.toLowerCase());
 
 /**
  * 获取供应商的启用状态（全选/半选/全不选）
@@ -112,8 +115,31 @@ const ModelModalContent: React.FC = () => {
   const isPageMode = viewMode === 'page';
   const [collapseKey, setCollapseKey] = useState<Record<string, boolean>>({});
   const [healthCheckLoading, setHealthCheckLoading] = useState<Record<string, boolean>>({});
+  const [defaultDshProviderId, setDefaultDshProviderId] = useState<string | null>(null);
   const { data, mutate } = useProvidersQuery();
   const [message, messageContext] = Message.useMessage();
+
+  const refreshDefaultDshProvider = (): void => {
+    void ipcBridge.mode.getDefaultDshProvider
+      .invoke()
+      .then((result) => setDefaultDshProviderId(result.provider_id))
+      .catch((error) => console.error('Failed to load the DeepSeek Harness provider:', error));
+  };
+
+  useEffect(() => {
+    refreshDefaultDshProvider();
+  }, []);
+
+  const selectDshProvider = async (provider: IProvider): Promise<void> => {
+    try {
+      const result = await ipcBridge.mode.setDefaultDshProvider.invoke({ provider_id: provider.id });
+      setDefaultDshProviderId(result.provider_id);
+      message.success(t('settings.dshProviderSelected'));
+    } catch (error) {
+      console.error('Failed to select the DeepSeek Harness provider:', error);
+      message.error(t('settings.dshProviderSelectFailed'));
+    }
+  };
 
   /**
    * Create when the provider id is new, update otherwise.
@@ -141,6 +167,7 @@ const ModelModalContent: React.FC = () => {
     persistPlatform(platform)
       .then(() => {
         void mutate();
+        refreshDefaultDshProvider();
         success();
       })
       .catch((error) => {
@@ -163,6 +190,7 @@ const ModelModalContent: React.FC = () => {
       .invoke({ id })
       .then(() => {
         void mutate();
+        refreshDefaultDshProvider();
       })
       .catch((error) => {
         void mutate();
@@ -471,11 +499,11 @@ const ModelModalContent: React.FC = () => {
                               className='cursor-pointer hover:text-t-primary transition-colors'
                               onClick={() => editModalCtrl.open({ data: platform })}
                             >
-                              {t('settings.apiKeyCount')}（{getApiKeyCount(platform.api_key)}）
+                              {t('settings.apiKeyCount')}（{getApiKeyCount(platform)}）
                             </span>
                           </span>
                           <span className='text-12px text-t-secondary whitespace-nowrap md:hidden'>
-                            {(platform.models ?? []).length} / {getApiKeyCount(platform.api_key)}
+                            {(platform.models ?? []).length} / {getApiKeyCount(platform)}
                           </span>
                           {/* 供应商启用开关 / Provider enable switch */}
                           <Switch
@@ -484,6 +512,27 @@ const ModelModalContent: React.FC = () => {
                             onChange={() => toggleProviderEnabled(platform)}
                           />
                           <div className='flex items-center gap-4px'>
+                            {defaultDshProviderId === platform.id ? (
+                              <Tag size='small' color='green'>
+                                {t('settings.dshProviderDefault')}
+                              </Tag>
+                            ) : (
+                              <Tooltip
+                                content={
+                                  isDshCompatibleProvider(platform)
+                                    ? t('settings.dshProviderSetDefaultTooltip')
+                                    : t('settings.dshProviderUnsupportedTooltip')
+                                }
+                              >
+                                <Button
+                                  size='mini'
+                                  disabled={!isDshCompatibleProvider(platform)}
+                                  className='model-provider-action-btn !w-28px !h-28px !min-w-28px text-t-secondary hover:text-t-primary'
+                                  icon={<Heartbeat size='14' />}
+                                  onClick={() => void selectDshProvider(platform)}
+                                />
+                              </Tooltip>
+                            )}
                             <Button
                               size='mini'
                               className='model-provider-action-btn !w-28px !h-28px !min-w-28px text-t-secondary hover:text-t-primary'

@@ -1358,6 +1358,14 @@
     "solveWithButler": "Ask the Butler"
   },
   "providerIdConflict": "Provider ID already exists. Please try again.",
+  "dshProviderSelected": "DeepSeek Harness provider updated.",
+  "dshProviderSelectFailed": "Could not update the DeepSeek Harness provider.",
+  "dshProviderDefault": "DSH default",
+  "dshProviderSetDefaultTooltip": "Use this provider for office, coding, and research modes",
+  "dshProviderUnsupportedTooltip": "DeepSeek Harness currently supports OpenAI-compatible Base URLs only",
+  "apiKeyStoredHint": "An API key is stored securely. Leave this field empty to keep it.",
+  "apiKeyKeepPlaceholder": "Leave empty to keep the stored API key",
+  "apiKeyClear": "Clear the stored API key when saving",
   "autoInjectedSkillsHint": "Loaded automatically into every conversation — no need to enable them; the agent decides when to use them.",
   "browserData": {
     "title": "In-app browser",

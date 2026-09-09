@@ -1358,6 +1358,14 @@
     "emptyOverridesError": "Enter a launch path or at least one environment variable before saving."
   },
   "providerIdConflict": "Provider-ID existiert bereits. Bitte erneut versuchen.",
+  "dshProviderSelected": "DeepSeek-Harness-Provider wurde aktualisiert.",
+  "dshProviderSelectFailed": "DeepSeek-Harness-Provider konnte nicht aktualisiert werden.",
+  "dshProviderDefault": "DSH-Standard",
+  "dshProviderSetDefaultTooltip": "Diesen Provider für Büro-, Coding- und Forschungsmodus verwenden",
+  "dshProviderUnsupportedTooltip": "DeepSeek Harness unterstützt derzeit nur OpenAI-kompatible Base URLs",
+  "apiKeyStoredHint": "Ein API-Schlüssel ist sicher gespeichert. Leer lassen, um ihn beizubehalten.",
+  "apiKeyKeepPlaceholder": "Leer lassen, um den gespeicherten API-Schlüssel zu behalten",
+  "apiKeyClear": "Gespeicherten API-Schlüssel beim Speichern löschen",
   "autoInjectedSkillsHint": "Werden automatisch in jede Unterhaltung geladen – kein Aktivieren nötig; der Agent entscheidet, wann er sie nutzt.",
   "browserData": {
     "title": "Integrierter Browser",

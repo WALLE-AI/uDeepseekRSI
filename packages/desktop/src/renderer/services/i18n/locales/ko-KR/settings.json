@@ -1360,6 +1360,14 @@
     "solveWithButler": "집사에게 문의"
   },
   "providerIdConflict": "Provider ID가 이미 있습니다. 다시 시도하세요.",
+  "dshProviderSelected": "DeepSeek Harness 공급자가 업데이트되었습니다.",
+  "dshProviderSelectFailed": "DeepSeek Harness 공급자를 업데이트할 수 없습니다.",
+  "dshProviderDefault": "DSH 기본값",
+  "dshProviderSetDefaultTooltip": "이 공급자를 오피스, 코딩 및 연구 모드에서 사용합니다",
+  "dshProviderUnsupportedTooltip": "DeepSeek Harness는 현재 OpenAI 호환 Base URL만 지원합니다",
+  "apiKeyStoredHint": "API 키가 안전하게 저장되어 있습니다. 비워 두면 기존 키를 유지합니다.",
+  "apiKeyKeepPlaceholder": "저장된 API 키를 유지하려면 비워 두세요",
+  "apiKeyClear": "저장할 때 저장된 API 키 지우기",
   "autoInjectedSkillsHint": "모든 대화에 자동으로 로드됩니다. 활성화할 필요가 없으며, 에이전트가 사용 시점을 결정합니다.",
   "browserData": {
     "title": "앱 내 브라우저",
