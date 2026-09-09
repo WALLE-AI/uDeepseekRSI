@@ -32,12 +32,19 @@ export type DshSessionConfigOption = {
   [key: string]: unknown;
 };
 
-export type DshMcpServer = {
-  name: string;
-  command: string;
-  args: string[];
-  env: Array<{ name: string; value: string }>;
-};
+export type DshMcpServer =
+  | {
+      name: string;
+      command: string;
+      args: string[];
+      env: Array<{ name: string; value: string }>;
+    }
+  | {
+      name: string;
+      type: 'http';
+      url: string;
+      headers: Array<{ name: string; value: string }>;
+    };
 
 export type DesktopShellPort = {
   checkToolInstalled(tool: string): Promise<boolean>;
@@ -58,8 +65,15 @@ export type DshSession = {
 
 export type DshAgentPort = {
   initialize(): Promise<{ protocolVersion: number; capabilities: unknown }>;
-  newSession(cwd: string): Promise<{ sessionId: string; configOptions?: DshSessionConfigOption[] }>;
-  resumeSession(sessionId: string, cwd: string): Promise<{ configOptions?: DshSessionConfigOption[] }>;
+  newSession(
+    cwd: string,
+    mcpServers?: readonly DshMcpServer[]
+  ): Promise<{ sessionId: string; configOptions?: DshSessionConfigOption[] }>;
+  resumeSession(
+    sessionId: string,
+    cwd: string,
+    mcpServers?: readonly DshMcpServer[]
+  ): Promise<{ configOptions?: DshSessionConfigOption[] }>;
   closeSession(sessionId: string): Promise<void>;
   prompt(sessionId: string, prompt: Array<{ type: 'text'; text: string }>): Promise<{ stopReason: string }>;
   cancel(sessionId: string): Promise<void>;

@@ -133,19 +133,19 @@ function createProcessDshConnection(options: CreateDshConnectionOptions): Proces
       });
       return { protocolVersion: result.protocolVersion as number, capabilities: result.agentCapabilities };
     },
-    async newSession(cwd) {
+    async newSession(cwd, mcpServers) {
       const result = await request<AcpResult>(methods.agent.session.new, {
         cwd,
-        mcpServers: options.mcpServers ?? [],
+        mcpServers: mcpServers ?? options.mcpServers ?? [],
       });
       const sessionId = result.sessionId as string;
       return { sessionId, configOptions: asConfigOptions(result.configOptions) };
     },
-    async resumeSession(sessionId, cwd) {
+    async resumeSession(sessionId, cwd, mcpServers) {
       const result = await request<AcpResult>(methods.agent.session.resume, {
         sessionId,
         cwd,
-        mcpServers: options.mcpServers ?? [],
+        mcpServers: mcpServers ?? options.mcpServers ?? [],
       });
       return { configOptions: asConfigOptions(result.configOptions) };
     },
@@ -196,7 +196,7 @@ function createProcessDshConnection(options: CreateDshConnectionOptions): Proces
   };
 }
 
-type TrackedSession = { cwd: string; conversationId?: string };
+type TrackedSession = { cwd: string; mcpServers?: readonly DshMcpServer[]; conversationId?: string };
 
 /** Keeps the direct ACP backend usable when the dsh stdio process exits while idle. */
 export function createDshConnection(options: CreateDshConnectionOptions): DshAgentPort {
@@ -219,7 +219,7 @@ export function createDshConnection(options: CreateDshConnectionOptions): DshAge
       for (const [sessionId, session] of sessions) {
         // Session persistence is owned by dsh, so the replacement process can resume it.
         // eslint-disable-next-line no-await-in-loop
-        await processPort.resumeSession(sessionId, session.cwd);
+        await processPort.resumeSession(sessionId, session.cwd, session.mcpServers);
         if (session.conversationId) processPort.bindSession(sessionId, session.conversationId);
       }
     })().finally(() => (recovery = null));
@@ -238,16 +238,16 @@ export function createDshConnection(options: CreateDshConnectionOptions): DshAge
       initialized = true;
       return result;
     },
-    async newSession(cwd) {
+    async newSession(cwd, mcpServers) {
       await ensureAlive();
-      const result = await processPort.newSession(cwd);
-      sessions.set(result.sessionId, { cwd });
+      const result = await processPort.newSession(cwd, mcpServers);
+      sessions.set(result.sessionId, { cwd, mcpServers });
       return result;
     },
-    async resumeSession(sessionId, cwd) {
+    async resumeSession(sessionId, cwd, mcpServers) {
       await ensureAlive();
-      const result = await processPort.resumeSession(sessionId, cwd);
-      sessions.set(sessionId, { cwd, conversationId: sessions.get(sessionId)?.conversationId });
+      const result = await processPort.resumeSession(sessionId, cwd, mcpServers);
+      sessions.set(sessionId, { cwd, mcpServers, conversationId: sessions.get(sessionId)?.conversationId });
       return result;
     },
     async closeSession(sessionId) {

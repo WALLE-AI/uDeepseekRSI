@@ -26,6 +26,8 @@
     "@deepseek-ai/dsh-subagent-in-process-driver": "0.1.2-rc.1",
     "@deepseek-ai/dsh-util-time": "0.1.2-rc.1",
     "@deepseek-ai/dsh-workflow": "0.1.2-rc.1",
+    "@modelcontextprotocol/sdk": "^1.20.0",
+    "js-yaml": "^4.1.0",
     "ws": "^8.18.3"
   }
 }
