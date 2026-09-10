@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer as createHttpServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join, resolve as resolvePath } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import WebSocket from 'ws';
 import { DshApiServer } from '../../../packages/dsh-bridge/src';
 import type {
@@ -16,14 +16,27 @@ import type {
 
 const cleanups: Array<() => Promise<void>> = [];
 
+function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((settle) => {
+    resolve = settle;
+  });
+  return { promise, resolve };
+}
+
 afterEach(async () => {
   await Promise.all(cleanups.splice(0).map((cleanup) => cleanup()));
+  vi.restoreAllMocks();
 });
 
 async function createServer(
   env?: NodeJS.ProcessEnv,
   officePreviewPort?: OfficePreviewPort,
-  options?: { authToken?: string }
+  options?: {
+    authToken?: string;
+    prewarmMode?: 'office' | 'coding' | 'research' | false;
+    portOverrides?: Partial<DshAgentPort>;
+  }
 ) {
   const root = await mkdtemp(join(tmpdir(), 'dsh-api-server-'));
   let emitUpdate: ((update: BridgeUpdate) => void) | undefined;
@@ -71,6 +84,7 @@ async function createServer(
     },
     bindSession: (sessionId, conversationId) => sessions.set(sessionId, conversationId),
     dispose: async () => undefined,
+    ...options?.portOverrides,
   };
   const server = new DshApiServer({
     cwd: root,
@@ -84,6 +98,7 @@ async function createServer(
     env,
     officePreviewPort,
     authToken: options?.authToken,
+    prewarmMode: options?.prewarmMode ?? false,
   });
   const serverPort = await server.start();
   cleanups.push(async () => {
@@ -97,10 +112,270 @@ async function createServer(
     setConfigCalls,
     sessionMcpServers,
     prompts,
+    port,
   };
 }
 
 describe('direct DeepSeek Harness HTTP backend', () => {
+  it('prewarms the configured runtime when the API server starts', async () => {
+    const initialize = vi.fn(async () => ({ protocolVersion: 1, capabilities: {} }));
+    await createServer(undefined, undefined, {
+      prewarmMode: 'coding',
+      portOverrides: { initialize },
+    });
+
+    await vi.waitFor(() => expect(initialize).toHaveBeenCalledTimes(1));
+  });
+
+  it('prepares a conversation session in the background and reuses it for ensure', async () => {
+    const newSession = vi.fn(async () => ({ sessionId: 'prepared-session', configOptions: [] }));
+    const { baseUrl } = await createServer(undefined, undefined, {
+      prewarmMode: 'office',
+      portOverrides: { newSession },
+    });
+    const created = (await (
+      await fetch(`${baseUrl}/api/conversations`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ assistant: { id: 'dsh:office' }, extra: {} }),
+      })
+    ).json()) as { data: { id: string } };
+
+    await vi.waitFor(() => expect(newSession).toHaveBeenCalledTimes(1));
+    const ensured = await fetch(`${baseUrl}/api/conversations/${created.data.id}/runtime/ensure`, { method: 'POST' });
+
+    expect(ensured.status).toBe(200);
+    expect(newSession).toHaveBeenCalledTimes(1);
+  });
+
+  it('includes complete context in background session latency events', async () => {
+    const info = vi.spyOn(console, 'info').mockImplementation(() => undefined);
+    const { baseUrl } = await createServer();
+    const created = (await (
+      await fetch(`${baseUrl}/api/conversations`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ assistant: { id: 'dsh:office' }, extra: {} }),
+      })
+    ).json()) as { data: { id: string } };
+    await fetch(`${baseUrl}/api/conversations/${created.data.id}/runtime/ensure`, { method: 'POST' });
+
+    const event = info.mock.calls
+      .map(([line]) => String(line))
+      .filter((line) => line.startsWith('[dsh-latency] '))
+      .map((line) => JSON.parse(line.slice('[dsh-latency] '.length)) as Record<string, unknown>)
+      .find((candidate) => candidate.stage === 'session_ready');
+    expect(event).toMatchObject({
+      conversation_id: created.data.id,
+      work_mode: 'office',
+      cold_runtime: true,
+      resumed_session: false,
+      mcp_count: 0,
+      elapsed_ms: expect.any(Number),
+    });
+  });
+
+  it('deduplicates concurrent runtime ensure and first-message session startup', async () => {
+    const sessionReady = deferred<{ sessionId: string; configOptions: [] }>();
+    let newSessionCalls = 0;
+    const { baseUrl } = await createServer(undefined, undefined, {
+      portOverrides: {
+        newSession: async () => {
+          newSessionCalls += 1;
+          return await sessionReady.promise;
+        },
+      },
+    });
+    const created = (await (
+      await fetch(`${baseUrl}/api/conversations`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ extra: {} }),
+      })
+    ).json()) as { data: { id: string } };
+
+    const ensured = fetch(`${baseUrl}/api/conversations/${created.data.id}/runtime/ensure`, { method: 'POST' });
+    await vi.waitFor(() => expect(newSessionCalls).toBe(1));
+    const sent = await fetch(`${baseUrl}/api/conversations/${created.data.id}/messages`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: 'hello' }),
+    });
+    expect(sent.status).toBe(202);
+    expect(newSessionCalls).toBe(1);
+
+    sessionReady.resolve({ sessionId: 'shared-session', configOptions: [] });
+    expect((await ensured).status).toBe(200);
+  });
+
+  it('clears a failed session startup so runtime ensure can retry', async () => {
+    let newSessionCalls = 0;
+    const { baseUrl } = await createServer(undefined, undefined, {
+      portOverrides: {
+        newSession: async () => {
+          newSessionCalls += 1;
+          if (newSessionCalls === 1) throw new Error('session startup failed');
+          return { sessionId: 'retry-session', configOptions: [] };
+        },
+      },
+    });
+    const created = (await (
+      await fetch(`${baseUrl}/api/conversations`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ extra: {} }),
+      })
+    ).json()) as { data: { id: string } };
+
+    const first = await fetch(`${baseUrl}/api/conversations/${created.data.id}/runtime/ensure`, { method: 'POST' });
+    const second = await fetch(`${baseUrl}/api/conversations/${created.data.id}/runtime/ensure`, { method: 'POST' });
+
+    expect(first.status).toBe(500);
+    expect(second.status).toBe(200);
+    expect(newSessionCalls).toBe(2);
+  });
+
+  it('closes a partially configured session before retrying initialization', async () => {
+    let newSessionCalls = 0;
+    let setConfigCalls = 0;
+    const closedSessions: string[] = [];
+    const { baseUrl } = await createServer(undefined, undefined, {
+      portOverrides: {
+        newSession: async () => {
+          newSessionCalls += 1;
+          return { sessionId: `session-${newSessionCalls}`, configOptions: [] };
+        },
+        setConfigOption: async () => {
+          setConfigCalls += 1;
+          if (setConfigCalls === 1) throw new Error('config failed');
+          return [];
+        },
+        closeSession: async (sessionId) => {
+          closedSessions.push(sessionId);
+        },
+      },
+    });
+    const created = (await (
+      await fetch(`${baseUrl}/api/conversations`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ extra: {} }),
+      })
+    ).json()) as { data: { id: string } };
+
+    const first = await fetch(`${baseUrl}/api/conversations/${created.data.id}/runtime/ensure`, { method: 'POST' });
+    const second = await fetch(`${baseUrl}/api/conversations/${created.data.id}/runtime/ensure`, { method: 'POST' });
+
+    expect(first.status).toBe(500);
+    expect(second.status).toBe(200);
+    expect(newSessionCalls).toBe(2);
+    expect(closedSessions).toEqual(['session-1']);
+  });
+
+  it('emits runtime initialization before a cold session becomes ready', async () => {
+    const sessionReady = deferred<{ sessionId: string; configOptions: [] }>();
+    const { baseUrl, serverPort } = await createServer(undefined, undefined, {
+      portOverrides: { newSession: async () => await sessionReady.promise },
+    });
+    const created = (await (
+      await fetch(`${baseUrl}/api/conversations`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ extra: {} }),
+      })
+    ).json()) as { data: { id: string } };
+    const socket = new WebSocket(`ws://127.0.0.1:${serverPort}/ws`);
+    await new Promise<void>((resolve, reject) => {
+      socket.once('open', () => resolve());
+      socket.once('error', reject);
+    });
+    const initializing = new Promise<{ type: string; data: { phase: string } }>((resolve) => {
+      socket.on('message', (raw) => {
+        const frame = JSON.parse(raw.toString()) as { name: string; data: { type: string; data: { phase?: string } } };
+        if (frame.name === 'message.stream' && frame.data.data.phase === 'runtime_initializing') {
+          resolve(frame.data as { type: string; data: { phase: string } });
+        }
+      });
+    });
+
+    const sent = await fetch(`${baseUrl}/api/conversations/${created.data.id}/messages`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: 'hello' }),
+    });
+    const event = await initializing;
+    expect(sent.status).toBe(202);
+    expect(event).toMatchObject({ type: 'start', data: { phase: 'runtime_initializing' } });
+    sessionReady.resolve({ sessionId: 'session-1', configOptions: [] });
+    socket.close();
+  });
+
+  it('rejects runtime restart while a conversation turn is active', async () => {
+    const promptGate = deferred<void>();
+    const { baseUrl } = await createServer(undefined, undefined, {
+      portOverrides: {
+        prompt: async () => {
+          await promptGate.promise;
+          return { stopReason: 'end_turn' };
+        },
+      },
+    });
+    const created = (await (
+      await fetch(`${baseUrl}/api/conversations`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ extra: {} }),
+      })
+    ).json()) as { data: { id: string } };
+
+    const sent = await fetch(`${baseUrl}/api/conversations/${created.data.id}/messages`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: 'hello' }),
+    });
+    const restarted = await fetch(`${baseUrl}/api/conversations/${created.data.id}/runtime/restart`, {
+      method: 'POST',
+    });
+    const body = (await restarted.json()) as { code: string };
+    promptGate.resolve(undefined);
+
+    expect(sent.status).toBe(202);
+    expect(restarted.status).toBe(409);
+    expect(body.code).toBe('CONVERSATION_BUSY');
+  });
+
+  it('skips matching startup config and maps thought level to ACP reasoning effort', async () => {
+    const modelValue = '["deepseek-official","deepseek-v4-flash"]';
+    const { baseUrl, setConfigCalls } = await createServer(undefined, undefined, {
+      portOverrides: {
+        newSession: async () => ({
+          sessionId: 'session-1',
+          configOptions: [
+            { id: 'model', currentValue: modelValue },
+            { id: 'reasoning_effort', currentValue: 'high' },
+          ],
+        }),
+      },
+    });
+    const created = (await (
+      await fetch(`${baseUrl}/api/conversations`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          assistant: {
+            id: 'dsh:office',
+            conversation_overrides: { model: 'deepseek-v4-flash', permission: 'bypass', thought_level: 'low' },
+          },
+          extra: {},
+        }),
+      })
+    ).json()) as { data: { id: string } };
+
+    const ensured = await fetch(`${baseUrl}/api/conversations/${created.data.id}/runtime/ensure`, { method: 'POST' });
+    expect(ensured.status).toBe(200);
+    expect(setConfigCalls).toEqual([{ sessionId: 'session-1', configId: 'reasoning_effort', value: 'low' }]);
+  });
+
   it('starts a first-run session without a custom DeepSeek gateway', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-first-run-'));
     const env = { ...process.env };

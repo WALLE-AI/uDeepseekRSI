@@ -5,6 +5,7 @@ import type { BridgeStopReason, DshBridgeOptions, DshMcpServer, DshSession } fro
 export class DshBridge {
   readonly #port: DshBridgeOptions['port'];
   readonly #sessions = new Map<string, DshSession>();
+  readonly #sessionStarts = new Map<string, Promise<DshSession>>();
   #started = false;
   #disposed = false;
 
@@ -24,18 +25,10 @@ export class DshBridge {
 
   async createSession(conversationId: string, cwd: string, mcpServers?: readonly DshMcpServer[]): Promise<DshSession> {
     this.#assertReady();
-    if (this.#sessions.has(conversationId))
-      throw new Error(`Conversation already has a dsh session: ${conversationId}`);
-    const created = await this.#port.newSession(cwd, mcpServers);
-    const session: DshSession = {
-      conversationId,
-      sessionId: created.sessionId,
-      cwd,
-      configOptions: created.configOptions ?? [],
-    };
-    this.#sessions.set(conversationId, session);
-    this.#port.bindSession(session.sessionId, conversationId);
-    return session;
+    return await this.#startSession(conversationId, cwd, async () => {
+      const created = await this.#port.newSession(cwd, mcpServers);
+      return { sessionId: created.sessionId, configOptions: created.configOptions ?? [] };
+    });
   }
 
   async resumeSession(
@@ -45,18 +38,10 @@ export class DshBridge {
     mcpServers?: readonly DshMcpServer[]
   ): Promise<DshSession> {
     this.#assertReady();
-    if (this.#sessions.has(conversationId))
-      throw new Error(`Conversation already has a dsh session: ${conversationId}`);
-    const resumed = await this.#port.resumeSession(sessionId, cwd, mcpServers);
-    const session: DshSession = {
-      conversationId,
-      sessionId,
-      cwd,
-      configOptions: resumed.configOptions ?? [],
-    };
-    this.#sessions.set(conversationId, session);
-    this.#port.bindSession(session.sessionId, conversationId);
-    return session;
+    return await this.#startSession(conversationId, cwd, async () => {
+      const resumed = await this.#port.resumeSession(sessionId, cwd, mcpServers);
+      return { sessionId, configOptions: resumed.configOptions ?? [] };
+    });
   }
 
   getSession(conversationId: string): DshSession | undefined {
@@ -90,6 +75,7 @@ export class DshBridge {
   }
 
   async closeSession(conversationId: string): Promise<void> {
+    await this.#sessionStarts.get(conversationId)?.catch((): undefined => undefined);
     const session = this.#requireSession(conversationId);
     if (session.activeTurnId) await this.#port.cancel(session.sessionId);
     await this.#port.closeSession(session.sessionId);
@@ -99,8 +85,41 @@ export class DshBridge {
   async dispose(): Promise<void> {
     if (this.#disposed) return;
     this.#disposed = true;
+    await Promise.allSettled(this.#sessionStarts.values());
+    this.#sessionStarts.clear();
     this.#sessions.clear();
     await this.#port.dispose();
+  }
+
+  async #startSession(
+    conversationId: string,
+    cwd: string,
+    create: () => Promise<{ sessionId: string; configOptions: DshSession['configOptions'] }>
+  ): Promise<DshSession> {
+    if (this.#sessions.has(conversationId)) {
+      throw new Error(`Conversation already has a dsh session: ${conversationId}`);
+    }
+    const pending = this.#sessionStarts.get(conversationId);
+    if (pending) return await pending;
+
+    const starting = (async () => {
+      const created = await create();
+      if (this.#disposed) {
+        await this.#port.closeSession(created.sessionId).catch((): undefined => undefined);
+        throw new Error('The dsh bridge is disposed.');
+      }
+      const session: DshSession = {
+        conversationId,
+        sessionId: created.sessionId,
+        cwd,
+        configOptions: created.configOptions,
+      };
+      this.#sessions.set(conversationId, session);
+      this.#port.bindSession(session.sessionId, conversationId);
+      return session;
+    })().finally(() => this.#sessionStarts.delete(conversationId));
+    this.#sessionStarts.set(conversationId, starting);
+    return await starting;
   }
 
   #assertReady(): void {

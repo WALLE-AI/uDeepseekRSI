@@ -19,6 +19,7 @@ export type CreateDshConnectionOptions = {
   patchPaths?: string[];
   env?: NodeJS.ProcessEnv;
   mcpServers?: readonly DshMcpServer[];
+  onLatencyStage?: (event: { stage: 'process_spawned' | 'acp_initialized'; durationMs: number }) => void;
   onUpdate?: (update: BridgeUpdate) => void;
   onPermissionRequest: (request: BridgePermissionRequest) => Promise<BridgePermissionDecision>;
 };
@@ -43,6 +44,7 @@ function asConfigOptions(value: unknown): DshSessionConfigOption[] {
 }
 
 function createProcessDshConnection(options: CreateDshConnectionOptions): ProcessDshAgentPort {
+  const spawnStartedAt = Date.now();
   const args = [resolveDshBin(), '--profile', 'acp'];
   for (const patchPath of options.patchPaths ?? []) args.push('--patch', patchPath);
   const child = spawn(process.execPath, args, {
@@ -57,6 +59,7 @@ function createProcessDshConnection(options: CreateDshConnectionOptions): Proces
     },
     stdio: ['pipe', 'pipe', 'pipe'],
   });
+  options.onLatencyStage?.({ stage: 'process_spawned', durationMs: Date.now() - spawnStartedAt });
   const sessionToConversation = new Map<string, string>();
   const sequenceBySession = new Map<string, number>();
   let stderr = '';
@@ -127,10 +130,12 @@ function createProcessDshConnection(options: CreateDshConnectionOptions): Proces
 
   return {
     async initialize() {
+      const startedAt = Date.now();
       const result = await request<AcpResult>(methods.agent.initialize, {
         protocolVersion: PROTOCOL_VERSION,
         clientCapabilities: {},
       });
+      options.onLatencyStage?.({ stage: 'acp_initialized', durationMs: Date.now() - startedAt });
       return { protocolVersion: result.protocolVersion as number, capabilities: result.agentCapabilities };
     },
     async newSession(cwd, mcpServers) {

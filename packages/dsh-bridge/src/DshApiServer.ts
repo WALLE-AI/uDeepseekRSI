@@ -33,6 +33,7 @@ import type {
   DesktopShellPort,
   DshAgentPort,
   DshMcpServer,
+  DshSession,
   DshSessionConfigOption,
 } from './types';
 import {
@@ -210,7 +211,19 @@ type PersistedState = {
   catalogRevision: number;
 };
 
-type ActiveTurn = { turnId: string; messageId: string; text: string; startedAt: number };
+type ActiveTurn = {
+  turnId: string;
+  messageId: string;
+  text: string;
+  startedAt: number;
+  workMode: DshWorkMode;
+  coldRuntime: boolean;
+  resumedSession: boolean;
+  mcpCount: number | null;
+  firstUpdateObserved: boolean;
+  firstThoughtObserved: boolean;
+  firstTextObserved: boolean;
+};
 type PendingPermission = {
   request: BridgePermissionRequest;
   messageId: string;
@@ -231,6 +244,7 @@ export type DshApiServerOptions = {
   officePreviewPort?: OfficePreviewPort;
   credentialStore?: ProviderCredentialStore;
   authToken?: string;
+  prewarmMode?: DshWorkMode | false;
   agentPortFactory?: (
     handlers: {
       onUpdate: (update: BridgeUpdate) => void;
@@ -676,6 +690,7 @@ export class DshApiServer {
   readonly #clients = new Set<WebSocket>();
   readonly #activeTurns = new Map<string, ActiveTurn>();
   readonly #pendingPermissions = new Map<string, PendingPermission>();
+  readonly #sessionStarts = new Map<string, Promise<DshSession>>();
   readonly #fsWatchers = new Map<WebSocket, Map<string, FSWatcher>>();
   readonly #workspacePreview: WorkspacePreviewService;
   #state: PersistedState = {
@@ -759,6 +774,8 @@ export class DshApiServer {
     this.#port = address.port;
     this.#server = server;
     this.#wsServer = wsServer;
+    const prewarmMode = this.#options.prewarmMode === undefined ? 'office' : this.#options.prewarmMode;
+    if (prewarmMode) void this.#warmRuntime(prewarmMode, 'backend_start');
     return this.#port;
   }
 
@@ -782,6 +799,9 @@ export class DshApiServer {
                 AIONUI_DSH_PERSONA: personaForDshWorkMode(mode),
                 AIONUI_SKILLS_DIRS_JSON: JSON.stringify([this.#skillsDir()]),
               },
+              onLatencyStage: ({ stage, durationMs }) => {
+                this.#logLatency({ stage, work_mode: mode, stage_duration_ms: durationMs });
+              },
               ...handlers,
             }),
     });
@@ -793,6 +813,8 @@ export class DshApiServer {
     for (const client of this.#clients) client.close();
     for (const client of this.#fsWatchers.keys()) this.#closeFsWatchers(client);
     this.#clients.clear();
+    await Promise.allSettled(this.#sessionStarts.values());
+    this.#sessionStarts.clear();
     this.#workspacePreview.dispose();
     await new Promise<void>((resolve) => this.#server?.close(() => resolve()) ?? resolve());
     this.#wsServer?.close();
@@ -803,6 +825,35 @@ export class DshApiServer {
     this.#bridge = null;
     await this.#officePreview.dispose();
     this.#port = 0;
+  }
+
+  async #warmRuntime(mode: DshWorkMode, source: 'backend_start' | 'conversation_created'): Promise<void> {
+    const bridge = this.#bridge;
+    if (!bridge) return;
+    const coldRuntime = !bridge.isWarm(mode);
+    const startedAt = Date.now();
+    try {
+      await bridge.warm(mode);
+      this.#logLatency({
+        stage: 'runtime_ready',
+        work_mode: mode,
+        cold_runtime: coldRuntime,
+        source,
+        stage_duration_ms: Date.now() - startedAt,
+      });
+    } catch (error) {
+      this.#logLatency({
+        stage: 'runtime_failed',
+        work_mode: mode,
+        cold_runtime: coldRuntime,
+        source,
+        stage_duration_ms: Date.now() - startedAt,
+        error_kind: error instanceof Error ? error.name : 'UnknownError',
+      });
+      console.warn(
+        `[dsh-bridge] Failed to prewarm ${mode} runtime from ${source} (${error instanceof Error ? error.name : 'UnknownError'}).`
+      );
+    }
   }
 
   async #officeFilePath(body: Record<string, unknown>): Promise<string> {
@@ -1411,6 +1462,25 @@ export class DshApiServer {
     }
   }
 
+  #logLatency(event: Record<string, unknown>): void {
+    console.info(`[dsh-latency] ${JSON.stringify(event)}`);
+  }
+
+  #traceTurn(conversationId: string, stage: string, details: Record<string, unknown> = {}): void {
+    const active = this.#activeTurns.get(conversationId);
+    this.#logLatency({
+      stage,
+      conversation_id: conversationId,
+      turn_id: active?.turnId,
+      work_mode: active?.workMode ?? null,
+      cold_runtime: active?.coldRuntime ?? null,
+      resumed_session: active?.resumedSession ?? null,
+      mcp_count: active?.mcpCount ?? null,
+      elapsed_ms: active ? Date.now() - active.startedAt : null,
+      ...details,
+    });
+  }
+
   #sendFs(client: WebSocket, data: unknown): void {
     if (client.readyState === client.OPEN) client.send(JSON.stringify({ name: 'fs', data }));
   }
@@ -1514,9 +1584,17 @@ export class DshApiServer {
   #handleUpdate(update: BridgeUpdate): void {
     const active = this.#activeTurns.get(update.conversationId);
     if (!active) return;
+    if (!active.firstUpdateObserved) {
+      active.firstUpdateObserved = true;
+      this.#traceTurn(update.conversationId, 'first_update', { update_kind: update.kind });
+    }
     const payload = update.payload as Record<string, unknown>;
     const text = extractText(payload);
     if (update.kind === 'assistant-text' && text) {
+      if (!active.firstTextObserved) {
+        active.firstTextObserved = true;
+        this.#traceTurn(update.conversationId, 'first_text');
+      }
       active.text += text;
       this.#emit('message.stream', {
         type: 'text',
@@ -1531,6 +1609,10 @@ export class DshApiServer {
       return;
     }
     if (update.kind === 'reasoning' && text) {
+      if (!active.firstThoughtObserved) {
+        active.firstThoughtObserved = true;
+        this.#traceTurn(update.conversationId, 'first_thought');
+      }
       this.#emit('message.stream', {
         type: 'thinking',
         data: { content: text, status: 'thinking' },
@@ -1611,37 +1693,147 @@ export class DshApiServer {
     });
   }
 
-  async #ensureSession(conversation: StoredConversation): Promise<void> {
+  async #ensureSession(conversation: StoredConversation): Promise<DshSession> {
     const workspace = await this.#workspaceForConversation(conversation);
     const workMode = normalizeDshWorkMode(conversation.extra.work_mode, conversation.assistant.id);
     conversation.extra.work_mode = workMode;
+    const pending = this.#sessionStarts.get(conversation.id);
+    if (pending) {
+      const session = await pending;
+      if (!sameCanonicalPath(session.cwd, workspace)) throw new Error('WORKSPACE_BINDING_MISMATCH');
+      return session;
+    }
     const existingSession = this.#bridge?.getSession(conversation.id);
     if (existingSession) {
       if (!sameCanonicalPath(existingSession.cwd, workspace)) throw new Error('WORKSPACE_BINDING_MISMATCH');
-      return;
+      return existingSession;
     }
+
+    const starting = this.#initializeSession(conversation, workspace, workMode).finally(() =>
+      this.#sessionStarts.delete(conversation.id)
+    );
+    this.#sessionStarts.set(conversation.id, starting);
+    return await starting;
+  }
+
+  async #initializeSession(
+    conversation: StoredConversation,
+    workspace: string,
+    workMode: DshWorkMode
+  ): Promise<DshSession> {
+    const bridge = this.#bridge;
+    if (!bridge) throw new Error('DeepSeek Harness bridge is unavailable.');
+    const coldRuntime = !bridge.isWarm(workMode);
+    const active = this.#activeTurns.get(conversation.id);
+    if (active) active.coldRuntime = coldRuntime;
+    const initializationStartedAt = Date.now();
+    const backgroundElapsed = (): Record<string, number> =>
+      active ? {} : { elapsed_ms: Date.now() - initializationStartedAt };
+    const runtimeStartedAt = Date.now();
+    this.#traceTurn(conversation.id, 'runtime_start_begin', {
+      work_mode: workMode,
+      cold_runtime: coldRuntime,
+      resumed_session: Boolean(conversation.session_id),
+      mcp_count: null,
+      ...backgroundElapsed(),
+    });
+    await bridge.warm(workMode);
+    this.#traceTurn(conversation.id, 'runtime_ready', {
+      cold_runtime: coldRuntime,
+      work_mode: workMode,
+      resumed_session: Boolean(conversation.session_id),
+      mcp_count: null,
+      ...backgroundElapsed(),
+      stage_duration_ms: Date.now() - runtimeStartedAt,
+    });
+
     const capabilities = this.#conversationCapabilities(conversation);
     const mcpServers = await this.#resolvedMcpServers(capabilities);
-    let session = conversation.session_id
-      ? await this.#bridge?.resumeSession(conversation.id, conversation.session_id, workspace, workMode, mcpServers)
-      : await this.#bridge?.createSession(conversation.id, workspace, workMode, mcpServers);
-    if (!session) throw new Error('DeepSeek Harness bridge is unavailable.');
+    const resumedSession = Boolean(conversation.session_id);
+    if (active) {
+      active.resumedSession = resumedSession;
+      active.mcpCount = mcpServers.length;
+    }
+    const sessionStartedAt = Date.now();
+    this.#traceTurn(conversation.id, 'session_begin', {
+      work_mode: workMode,
+      cold_runtime: coldRuntime,
+      resumed_session: resumedSession,
+      mcp_count: mcpServers.length,
+      ...backgroundElapsed(),
+    });
+    let session: DshSession;
+    try {
+      session = conversation.session_id
+        ? await bridge.resumeSession(conversation.id, conversation.session_id, workspace, workMode, mcpServers)
+        : await bridge.createSession(conversation.id, workspace, workMode, mcpServers);
+    } catch (error) {
+      this.#traceTurn(conversation.id, 'session_failed', {
+        work_mode: workMode,
+        cold_runtime: coldRuntime,
+        resumed_session: resumedSession,
+        mcp_count: mcpServers.length,
+        mcp_names: mcpServers.map((server) => server.name),
+        ...backgroundElapsed(),
+        stage_duration_ms: Date.now() - sessionStartedAt,
+        error_kind: error instanceof Error ? error.name : 'UnknownError',
+      });
+      throw error;
+    }
+    this.#traceTurn(conversation.id, 'session_ready', {
+      work_mode: workMode,
+      cold_runtime: coldRuntime,
+      resumed_session: resumedSession,
+      mcp_count: mcpServers.length,
+      ...backgroundElapsed(),
+      stage_duration_ms: Date.now() - sessionStartedAt,
+    });
     conversation.session_id = session.sessionId;
     conversation.extra.acp_session_id = session.sessionId;
-    const options = [
-      capabilities.model ? { id: 'model', value: toDshModelValue(this.#providerId, capabilities.model) } : undefined,
-      capabilities.permission ? { id: 'permission', value: capabilities.permission } : undefined,
-      capabilities.thoughtLevel ? { id: 'thought_level', value: capabilities.thoughtLevel } : undefined,
-    ].filter((option): option is { id: string; value: string } => option !== undefined);
-    for (const option of options) {
-      // ACP applies startup defaults serially to preserve config dependency order.
-      // eslint-disable-next-line no-await-in-loop
-      session = (await this.#bridge?.setConfigOption(conversation.id, option.id, option.value)) ?? session;
+    try {
+      const options = [
+        capabilities.model ? { id: 'model', value: toDshModelValue(this.#providerId, capabilities.model) } : undefined,
+        capabilities.thoughtLevel ? { id: 'reasoning_effort', value: capabilities.thoughtLevel } : undefined,
+      ].filter((option): option is { id: string; value: string } => option !== undefined);
+      const configStartedAt = Date.now();
+      let appliedConfigCount = 0;
+      for (const option of options) {
+        const current = session.configOptions.find((candidate) => candidate.id === option.id)?.currentValue;
+        if (current === option.value) continue;
+        // ACP applies startup defaults serially to preserve config dependency order.
+        // eslint-disable-next-line no-await-in-loop
+        session = await bridge.setConfigOption(conversation.id, option.id, option.value);
+        appliedConfigCount += 1;
+      }
+      this.#traceTurn(conversation.id, 'config_ready', {
+        work_mode: workMode,
+        cold_runtime: coldRuntime,
+        resumed_session: resumedSession,
+        mcp_count: mcpServers.length,
+        ...backgroundElapsed(),
+        requested_config_count: options.length,
+        applied_config_count: appliedConfigCount,
+        stage_duration_ms: Date.now() - configStartedAt,
+      });
+      const currentModelId = toUiModelId(capabilities.model ?? conversation.extra.current_model_id);
+      conversation.extra.current_model_id = currentModelId;
+      conversation.extra.cached_config_options = this.#uiConfigOptions(session.configOptions, currentModelId);
+      await this.#persist();
+      return session;
+    } catch (error) {
+      await bridge.closeSession(conversation.id).catch((): undefined => undefined);
+      delete conversation.session_id;
+      delete conversation.extra.acp_session_id;
+      this.#traceTurn(conversation.id, 'config_failed', {
+        work_mode: workMode,
+        cold_runtime: coldRuntime,
+        resumed_session: resumedSession,
+        mcp_count: mcpServers.length,
+        ...backgroundElapsed(),
+        error_kind: error instanceof Error ? error.name : 'UnknownError',
+      });
+      throw error;
     }
-    const currentModelId = toUiModelId(capabilities.model ?? conversation.extra.current_model_id);
-    conversation.extra.current_model_id = currentModelId;
-    conversation.extra.cached_config_options = this.#uiConfigOptions(session.configOptions, currentModelId);
-    await this.#persist();
   }
 
   async #sendPrompt(
@@ -1655,7 +1847,7 @@ export class DshApiServer {
       await this.#ensureSession(conversation);
       this.#emit('message.stream', {
         type: 'start',
-        data: {},
+        data: { phase: 'model_waiting' },
         msg_id: messageId,
         turn_id: turnId,
         conversation_id: conversation.id,
@@ -1672,6 +1864,7 @@ export class DshApiServer {
       );
       const skillGestures = skillIds.map((name) => `/${name}`);
       const promptText = skillGestures.length > 0 ? `${text}\n\n${skillGestures.join(' ')}` : text;
+      this.#traceTurn(conversation.id, 'prompt_sent');
       const stopReason = await this.#bridge?.prompt(conversation.id, promptText, turnId);
       if (needsSkillInjection && session) conversation.extra.skills_injected_session_id = session.sessionId;
       const active = this.#activeTurns.get(conversation.id);
@@ -2421,6 +2614,13 @@ export class DshApiServer {
         });
         this.#state.messages[conversation.id] = [];
         await this.#persist();
+        if (this.#options.prewarmMode !== false) {
+          void this.#ensureSession(conversation).catch((error: unknown) => {
+            console.warn(
+              `[dsh-bridge] Failed to prepare ${workMode} session for conversation ${conversation.id} (${error instanceof Error ? error.name : 'UnknownError'}).`
+            );
+          });
+        }
         this.#emit('conversation.listChanged', {
           conversation_id: conversation.id,
           action: 'created',
@@ -2679,6 +2879,8 @@ export class DshApiServer {
           const userId = randomUUID().slice(0, 8);
           const assistantId = randomUUID().slice(0, 8);
           const createdAt = Date.now();
+          const workMode = normalizeDshWorkMode(conversation.extra.work_mode, conversation.assistant.id);
+          conversation.extra.work_mode = workMode;
           (this.#state.messages[conversationId] ??= []).push({
             id: userId,
             conversation_id: conversationId,
@@ -2694,16 +2896,60 @@ export class DshApiServer {
           conversation.status = 'running';
           conversation.runtime = runningRuntime(turnId);
           conversation.modified_at = createdAt;
-          this.#activeTurns.set(conversationId, { turnId, messageId: assistantId, text: '', startedAt: createdAt });
+          this.#activeTurns.set(conversationId, {
+            turnId,
+            messageId: assistantId,
+            text: '',
+            startedAt: createdAt,
+            workMode,
+            coldRuntime: this.#bridge ? !this.#bridge.isWarm(workMode) : true,
+            resumedSession: Boolean(conversation.session_id),
+            mcpCount: null,
+            firstUpdateObserved: false,
+            firstThoughtObserved: false,
+            firstTextObserved: false,
+          });
+          this.#traceTurn(conversationId, 'message_received');
+          this.#emit('message.stream', {
+            type: 'request_trace',
+            data: {
+              timestamp: createdAt,
+              backend: 'deepseek-harness',
+              model_id: toUiModelId(conversation.extra.current_model_id),
+              session_mode: conversation.extra.work_mode,
+              stage: 'message_received',
+            },
+            msg_id: assistantId,
+            turn_id: turnId,
+            conversation_id: conversationId,
+            created_at: createdAt,
+          });
+          this.#emit('message.stream', {
+            type: 'start',
+            data: { phase: 'runtime_initializing' },
+            msg_id: assistantId,
+            turn_id: turnId,
+            conversation_id: conversationId,
+            created_at: createdAt,
+          });
           await this.#persist();
+          this.#traceTurn(conversationId, 'message_accepted');
           void this.#sendPrompt(conversation, text, turnId, assistantId, explicitSkillIds);
           responseData(response, { msg_id: userId, turn_id: turnId, runtime: conversation.runtime }, 202);
           return;
         }
         if ((tail === 'runtime/ensure' || tail === 'runtime/restart') && method === 'POST') {
+          if (tail === 'runtime/restart' && this.#activeTurns.has(conversationId)) {
+            responseData(response, { error: 'Conversation is already running.', code: 'CONVERSATION_BUSY' }, 409);
+            return;
+          }
+          if (tail === 'runtime/restart') {
+            await this.#sessionStarts.get(conversationId)?.catch((): undefined => undefined);
+          }
           if (tail === 'runtime/restart' && this.#bridge?.getSession(conversationId)) {
             await this.#bridge.closeSession(conversationId);
             delete conversation.session_id;
+            delete conversation.extra.acp_session_id;
           }
           await this.#ensureSession(conversation);
           responseData(response, {
@@ -2747,15 +2993,29 @@ export class DshApiServer {
           return;
         }
         if (tail.startsWith('config-options/') && method === 'PUT') {
-          await this.#ensureSession(conversation);
+          let session = await this.#ensureSession(conversation);
           const body = await readJsonBody(request);
           const configId = decodeURIComponent(tail.slice('config-options/'.length));
+          if (configId === 'permission') {
+            throw new DshApiError(400, 'CONFIG_OPTION_UNSUPPORTED', 'Permission is not a DSH ACP session option.');
+          }
+          const bridgeConfigId = configId === 'thought_level' ? 'reasoning_effort' : configId;
           const requestedValue = String(body.value ?? '');
-          const bridgeValue = configId === 'model' ? toDshModelValue(this.#providerId, requestedValue) : requestedValue;
-          const session = await this.#bridge?.setConfigOption(conversationId, configId, bridgeValue);
+          const bridgeValue =
+            bridgeConfigId === 'model' ? toDshModelValue(this.#providerId, requestedValue) : requestedValue;
+          const currentValue = session.configOptions.find((option) => option.id === bridgeConfigId)?.currentValue;
+          if (currentValue !== bridgeValue) {
+            session = (await this.#bridge?.setConfigOption(conversationId, bridgeConfigId, bridgeValue)) ?? session;
+          }
           if (configId === 'model') conversation.extra.current_model_id = requestedValue;
+          if (bridgeConfigId === 'reasoning_effort') {
+            const snapshot = conversation.extra.capability_snapshot;
+            if (snapshot && typeof snapshot === 'object' && !Array.isArray(snapshot)) {
+              (snapshot as Record<string, unknown>).thoughtLevel = requestedValue;
+            }
+          }
           const configOptions = this.#uiConfigOptions(
-            session?.configOptions ?? [],
+            session.configOptions,
             toUiModelId(conversation.extra.current_model_id)
           );
           conversation.extra.cached_config_options = configOptions;

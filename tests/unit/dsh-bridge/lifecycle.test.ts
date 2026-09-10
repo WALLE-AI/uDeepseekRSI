@@ -57,6 +57,37 @@ describe('dsh bridge lifecycle', () => {
     await first;
   });
 
+  it('shares one session creation across concurrent callers', async () => {
+    const created = deferred<{ sessionId: string; configOptions: [] }>();
+    const newSession = vi.fn(() => created.promise);
+    const bridge = new DshBridge({ port: fakePort({ newSession }) });
+    await bridge.start();
+
+    const first = bridge.createSession('conversation-1', 'D:/workspace');
+    const second = bridge.createSession('conversation-1', 'D:/workspace');
+    expect(newSession).toHaveBeenCalledTimes(1);
+
+    created.resolve({ sessionId: 'shared-session', configOptions: [] });
+    await expect(Promise.all([first, second])).resolves.toEqual([
+      expect.objectContaining({ sessionId: 'shared-session' }),
+      expect.objectContaining({ sessionId: 'shared-session' }),
+    ]);
+  });
+
+  it('allows session creation to retry after a failed attempt', async () => {
+    const newSession = vi
+      .fn<DshAgentPort['newSession']>()
+      .mockRejectedValueOnce(new Error('startup failed'))
+      .mockResolvedValueOnce({ sessionId: 'retry-session', configOptions: [] });
+    const bridge = new DshBridge({ port: fakePort({ newSession }) });
+    await bridge.start();
+
+    await expect(bridge.createSession('conversation-1', 'D:/workspace')).rejects.toThrow('startup failed');
+    await expect(bridge.createSession('conversation-1', 'D:/workspace')).resolves.toMatchObject({
+      sessionId: 'retry-session',
+    });
+  });
+
   it('rejects an incompatible ACP server before publishing sessions', async () => {
     const port = fakePort({ initialize: vi.fn(async () => ({ protocolVersion: 2, capabilities: {} })) });
     const bridge = new DshBridge({ port });
@@ -67,6 +98,26 @@ describe('dsh bridge lifecycle', () => {
 });
 
 describe('dsh work mode runtime pool', () => {
+  it('shares an in-flight warmup and reuses the initialized runtime', async () => {
+    const initialized = deferred<{ protocolVersion: number; capabilities: {} }>();
+    const initialize = vi.fn(() => initialized.promise);
+    const createPort = vi.fn(() => fakePort({ initialize }));
+    const pool = new DshRuntimePool({ createPort });
+
+    const first = pool.warm('coding');
+    const second = pool.warm('coding');
+    expect(pool.isWarm('coding')).toBe(false);
+    expect(createPort).toHaveBeenCalledTimes(1);
+    expect(initialize).toHaveBeenCalledTimes(1);
+
+    initialized.resolve({ protocolVersion: 1, capabilities: {} });
+    await Promise.all([first, second]);
+    expect(pool.isWarm('coding')).toBe(true);
+    await pool.createSession('coding-conversation', 'D:/code', 'coding');
+    expect(initialize).toHaveBeenCalledTimes(1);
+    await pool.dispose();
+  });
+
   it('starts each mode lazily and keeps conversations on their selected runtime', async () => {
     const createdModes: string[] = [];
     const ports = new Map<string, DshAgentPort>();

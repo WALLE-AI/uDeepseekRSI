@@ -15,7 +15,11 @@ import { useMergeLiveMessage } from '@/renderer/pages/conversation/Messages/hook
 import { logStreamTerminalObserved } from '@/renderer/pages/conversation/runtime/useConversationRuntimeView';
 import { getConversationOrNull } from '@/renderer/pages/conversation/utils/conversationCache';
 import { isConversationProcessing } from '@/renderer/pages/conversation/utils/conversationRuntime';
-import { beginConversationTurn, endConversationTurn } from '@/renderer/pages/conversation/utils/conversationTurnClock';
+import {
+  beginConversationTurn,
+  endConversationTurn,
+  getConversationTurnStart,
+} from '@/renderer/pages/conversation/utils/conversationTurnClock';
 import { ensureConversationRuntime } from '@/renderer/pages/conversation/utils/ensureConversationRuntime';
 import type { ThoughtData } from '@/renderer/components/chat/ThoughtDisplay';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -388,6 +392,22 @@ export const useAcpMessage = (
           // First content token — AI has started responding, clear processing indicator
           if (!hasContentInTurnRef.current) {
             hasContentInTurnRef.current = true;
+            const trace = requestTraceRef.current;
+            const startedAt = trace?.startTime ?? getConversationTurnStart(conversation_id);
+            if (startedAt !== null) {
+              const elapsedMs = Date.now() - startedAt;
+              console.info(
+                `[RequestTrace] FIRST_TEXT | ${trace?.backend ?? 'unknown'} -> ${trace?.model_id ?? 'unknown'} | ${elapsedMs}ms | ${new Date().toISOString()}`,
+                {
+                  stage: 'renderer_first_text',
+                  conversation_id,
+                  turn_id: message.turn_id,
+                  work_mode: trace?.session_mode ?? null,
+                  elapsed_ms: elapsedMs,
+                  trace_source: trace ? 'request_trace' : 'turn_clock',
+                }
+              );
+            }
             setAiProcessing(false);
             aiProcessingRef.current = false;
           }

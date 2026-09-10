@@ -64,6 +64,7 @@ export class DshRuntimePool {
   readonly #createPort: DshRuntimePoolOptions['createPort'];
   readonly #bridges = new Map<DshWorkMode, DshBridge>();
   readonly #starting = new Map<DshWorkMode, Promise<DshBridge>>();
+  readonly #sessionStarts = new Map<string, { mode: DshWorkMode; promise: Promise<DshSession> }>();
   readonly #conversationModes = new Map<string, DshWorkMode>();
   #disposed = false;
 
@@ -76,16 +77,24 @@ export class DshRuntimePool {
     return mode ? this.#bridges.get(mode)?.getSession(conversationId) : undefined;
   }
 
+  isWarm(mode: DshWorkMode): boolean {
+    return this.#bridges.has(mode);
+  }
+
+  async warm(mode: DshWorkMode): Promise<void> {
+    await this.#bridge(mode);
+  }
+
   async createSession(
     conversationId: string,
     cwd: string,
     mode: DshWorkMode,
     mcpServers?: readonly DshMcpServer[]
   ): Promise<DshSession> {
-    const bridge = await this.#bridge(mode);
-    const session = await bridge.createSession(conversationId, cwd, mcpServers);
-    this.#conversationModes.set(conversationId, mode);
-    return session;
+    return await this.#startSession(conversationId, mode, async () => {
+      const bridge = await this.#bridge(mode);
+      return await bridge.createSession(conversationId, cwd, mcpServers);
+    });
   }
 
   async resumeSession(
@@ -95,10 +104,10 @@ export class DshRuntimePool {
     mode: DshWorkMode,
     mcpServers?: readonly DshMcpServer[]
   ): Promise<DshSession> {
-    const bridge = await this.#bridge(mode);
-    const session = await bridge.resumeSession(conversationId, sessionId, cwd, mcpServers);
-    this.#conversationModes.set(conversationId, mode);
-    return session;
+    return await this.#startSession(conversationId, mode, async () => {
+      const bridge = await this.#bridge(mode);
+      return await bridge.resumeSession(conversationId, sessionId, cwd, mcpServers);
+    });
   }
 
   async prompt(conversationId: string, text: string, turnId?: string): Promise<BridgeStopReason> {
@@ -114,6 +123,7 @@ export class DshRuntimePool {
   }
 
   async closeSession(conversationId: string): Promise<void> {
+    await this.#sessionStarts.get(conversationId)?.promise.catch((): undefined => undefined);
     const bridge = this.#conversationBridge(conversationId);
     await bridge.closeSession(conversationId);
     this.#conversationModes.delete(conversationId);
@@ -123,11 +133,37 @@ export class DshRuntimePool {
     if (this.#disposed) return;
     this.#disposed = true;
     await Promise.allSettled(this.#starting.values());
+    await Promise.allSettled([...this.#sessionStarts.values()].map(({ promise }) => promise));
     const bridges = [...this.#bridges.values()];
     this.#bridges.clear();
     this.#starting.clear();
+    this.#sessionStarts.clear();
     this.#conversationModes.clear();
     await Promise.all(bridges.map((bridge) => bridge.dispose()));
+  }
+
+  async #startSession(
+    conversationId: string,
+    mode: DshWorkMode,
+    create: () => Promise<DshSession>
+  ): Promise<DshSession> {
+    const existing = this.getSession(conversationId);
+    if (existing) return existing;
+    const pending = this.#sessionStarts.get(conversationId);
+    if (pending) {
+      if (pending.mode !== mode) throw new Error(`Conversation runtime mode changed during startup: ${conversationId}`);
+      return await pending.promise;
+    }
+
+    const promise = create()
+      .then((session) => {
+        if (this.#disposed) throw new Error('The dsh runtime pool is disposed.');
+        this.#conversationModes.set(conversationId, mode);
+        return session;
+      })
+      .finally(() => this.#sessionStarts.delete(conversationId));
+    this.#sessionStarts.set(conversationId, { mode, promise });
+    return await promise;
   }
 
   async #bridge(mode: DshWorkMode): Promise<DshBridge> {

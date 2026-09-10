@@ -200,6 +200,81 @@ describe('useAcpMessage', () => {
     );
   });
 
+  it('logs first-text latency only once per turn', () => {
+    vi.mocked(getConversationOrNull).mockResolvedValue(null);
+    const info = vi.spyOn(console, 'info').mockImplementation(() => undefined);
+
+    renderHook(() => useAcpMessage('conv-1'));
+    responseStreamHandlerRef.current?.({
+      type: 'request_trace',
+      data: { timestamp: Date.now() - 100, backend: 'dsh', model_id: 'deepseek-v4-flash' },
+      msg_id: 'msg-1',
+      turn_id: 'turn-1',
+      conversation_id: 'conv-1',
+    });
+    responseStreamHandlerRef.current?.({
+      type: 'text',
+      data: 'first',
+      msg_id: 'msg-1',
+      turn_id: 'turn-1',
+      conversation_id: 'conv-1',
+    });
+    responseStreamHandlerRef.current?.({
+      type: 'text',
+      data: 'second',
+      msg_id: 'msg-1',
+      turn_id: 'turn-1',
+      conversation_id: 'conv-1',
+    });
+
+    expect(info).toHaveBeenCalledTimes(1);
+    expect(info).toHaveBeenCalledWith(
+      expect.stringContaining('[RequestTrace] FIRST_TEXT'),
+      expect.objectContaining({
+        stage: 'renderer_first_text',
+        conversation_id: 'conv-1',
+        turn_id: 'turn-1',
+        elapsed_ms: expect.any(Number),
+      })
+    );
+    info.mockRestore();
+  });
+
+  it('falls back to the turn clock when the initial request trace was missed', () => {
+    vi.mocked(getConversationOrNull).mockResolvedValue(null);
+    const info = vi.spyOn(console, 'info').mockImplementation(() => undefined);
+
+    const { result } = renderHook(() => useAcpMessage('conv-1'));
+    act(() => result.current.setAiProcessing(true));
+    responseStreamHandlerRef.current?.({
+      type: 'text',
+      data: 'first',
+      msg_id: 'msg-1',
+      turn_id: 'turn-1',
+      conversation_id: 'conv-1',
+    });
+    responseStreamHandlerRef.current?.({
+      type: 'text',
+      data: 'second',
+      msg_id: 'msg-1',
+      turn_id: 'turn-1',
+      conversation_id: 'conv-1',
+    });
+
+    expect(info).toHaveBeenCalledTimes(1);
+    expect(info).toHaveBeenCalledWith(
+      expect.stringContaining('[RequestTrace] FIRST_TEXT | unknown -> unknown'),
+      expect.objectContaining({
+        stage: 'renderer_first_text',
+        conversation_id: 'conv-1',
+        turn_id: 'turn-1',
+        elapsed_ms: expect.any(Number),
+        trace_source: 'turn_clock',
+      })
+    );
+    info.mockRestore();
+  });
+
   it('preserves slash-command metadata from available_commands stream updates', async () => {
     vi.mocked(getConversationOrNull).mockResolvedValue(null);
 
