@@ -25,25 +25,10 @@ export class DshBridge {
 
   async createSession(conversationId: string, cwd: string, mcpServers?: readonly DshMcpServer[]): Promise<DshSession> {
     this.#assertReady();
-<<<<<<< HEAD
     return await this.#startSession(conversationId, cwd, async () => {
       const created = await this.#port.newSession(cwd, mcpServers);
       return { sessionId: created.sessionId, configOptions: created.configOptions ?? [] };
     });
-=======
-    if (this.#sessions.has(conversationId))
-      throw new Error(`Conversation already has a dsh session: ${conversationId}`);
-    const created = await this.#port.newSession(cwd, mcpServers);
-    const session: DshSession = {
-      conversationId,
-      sessionId: created.sessionId,
-      cwd,
-      configOptions: created.configOptions ?? [],
-    };
-    this.#sessions.set(conversationId, session);
-    this.#port.bindSession(session.sessionId, conversationId);
-    return session;
->>>>>>> bc237b88135c02f5fff8c017bcef5645267a5591
   }
 
   async resumeSession(
@@ -53,25 +38,10 @@ export class DshBridge {
     mcpServers?: readonly DshMcpServer[]
   ): Promise<DshSession> {
     this.#assertReady();
-<<<<<<< HEAD
     return await this.#startSession(conversationId, cwd, async () => {
       const resumed = await this.#port.resumeSession(sessionId, cwd, mcpServers);
       return { sessionId, configOptions: resumed.configOptions ?? [] };
     });
-=======
-    if (this.#sessions.has(conversationId))
-      throw new Error(`Conversation already has a dsh session: ${conversationId}`);
-    const resumed = await this.#port.resumeSession(sessionId, cwd, mcpServers);
-    const session: DshSession = {
-      conversationId,
-      sessionId,
-      cwd,
-      configOptions: resumed.configOptions ?? [],
-    };
-    this.#sessions.set(conversationId, session);
-    this.#port.bindSession(session.sessionId, conversationId);
-    return session;
->>>>>>> bc237b88135c02f5fff8c017bcef5645267a5591
   }
 
   getSession(conversationId: string): DshSession | undefined {

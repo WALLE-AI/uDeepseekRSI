@@ -77,7 +77,6 @@ export class DshRuntimePool {
     return mode ? this.#bridges.get(mode)?.getSession(conversationId) : undefined;
   }
 
-<<<<<<< HEAD
   isWarm(mode: DshWorkMode): boolean {
     return this.#bridges.has(mode);
   }
@@ -98,20 +97,6 @@ export class DshRuntimePool {
     });
   }
 
-=======
-  async createSession(
-    conversationId: string,
-    cwd: string,
-    mode: DshWorkMode,
-    mcpServers?: readonly DshMcpServer[]
-  ): Promise<DshSession> {
-    const bridge = await this.#bridge(mode);
-    const session = await bridge.createSession(conversationId, cwd, mcpServers);
-    this.#conversationModes.set(conversationId, mode);
-    return session;
-  }
-
->>>>>>> bc237b88135c02f5fff8c017bcef5645267a5591
   async resumeSession(
     conversationId: string,
     sessionId: string,
@@ -119,17 +104,10 @@ export class DshRuntimePool {
     mode: DshWorkMode,
     mcpServers?: readonly DshMcpServer[]
   ): Promise<DshSession> {
-<<<<<<< HEAD
     return await this.#startSession(conversationId, mode, async () => {
       const bridge = await this.#bridge(mode);
       return await bridge.resumeSession(conversationId, sessionId, cwd, mcpServers);
     });
-=======
-    const bridge = await this.#bridge(mode);
-    const session = await bridge.resumeSession(conversationId, sessionId, cwd, mcpServers);
-    this.#conversationModes.set(conversationId, mode);
-    return session;
->>>>>>> bc237b88135c02f5fff8c017bcef5645267a5591
   }
 
   async prompt(conversationId: string, text: string, turnId?: string): Promise<BridgeStopReason> {

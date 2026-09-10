@@ -112,10 +112,7 @@ async function createServer(
     setConfigCalls,
     sessionMcpServers,
     prompts,
-<<<<<<< HEAD
     port,
-=======
->>>>>>> bc237b88135c02f5fff8c017bcef5645267a5591
   };
 }
 
