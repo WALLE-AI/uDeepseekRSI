@@ -798,9 +798,12 @@ export class DshApiServer {
                 AIONUI_DEEPSEEK_MODELS_JSON: JSON.stringify(this.#models.map((model) => model.id)),
                 AIONUI_DSH_PERSONA: personaForDshWorkMode(mode),
                 AIONUI_SKILLS_DIRS_JSON: JSON.stringify([this.#skillsDir()]),
+<<<<<<< HEAD
               },
               onLatencyStage: ({ stage, durationMs }) => {
                 this.#logLatency({ stage, work_mode: mode, stage_duration_ms: durationMs });
+=======
+>>>>>>> bc237b88135c02f5fff8c017bcef5645267a5591
               },
               ...handlers,
             }),
@@ -1708,6 +1711,7 @@ export class DshApiServer {
       if (!sameCanonicalPath(existingSession.cwd, workspace)) throw new Error('WORKSPACE_BINDING_MISMATCH');
       return existingSession;
     }
+<<<<<<< HEAD
 
     const starting = this.#initializeSession(conversation, workspace, workMode).finally(() =>
       this.#sessionStarts.delete(conversation.id)
@@ -1836,6 +1840,32 @@ export class DshApiServer {
     }
   }
 
+=======
+    const capabilities = this.#conversationCapabilities(conversation);
+    const mcpServers = await this.#resolvedMcpServers(capabilities);
+    let session = conversation.session_id
+      ? await this.#bridge?.resumeSession(conversation.id, conversation.session_id, workspace, workMode, mcpServers)
+      : await this.#bridge?.createSession(conversation.id, workspace, workMode, mcpServers);
+    if (!session) throw new Error('DeepSeek Harness bridge is unavailable.');
+    conversation.session_id = session.sessionId;
+    conversation.extra.acp_session_id = session.sessionId;
+    const options = [
+      capabilities.model ? { id: 'model', value: toDshModelValue(this.#providerId, capabilities.model) } : undefined,
+      capabilities.permission ? { id: 'permission', value: capabilities.permission } : undefined,
+      capabilities.thoughtLevel ? { id: 'thought_level', value: capabilities.thoughtLevel } : undefined,
+    ].filter((option): option is { id: string; value: string } => option !== undefined);
+    for (const option of options) {
+      // ACP applies startup defaults serially to preserve config dependency order.
+      // eslint-disable-next-line no-await-in-loop
+      session = (await this.#bridge?.setConfigOption(conversation.id, option.id, option.value)) ?? session;
+    }
+    const currentModelId = toUiModelId(capabilities.model ?? conversation.extra.current_model_id);
+    conversation.extra.current_model_id = currentModelId;
+    conversation.extra.cached_config_options = this.#uiConfigOptions(session.configOptions, currentModelId);
+    await this.#persist();
+  }
+
+>>>>>>> bc237b88135c02f5fff8c017bcef5645267a5591
   async #sendPrompt(
     conversation: StoredConversation,
     text: string,
@@ -1864,7 +1894,10 @@ export class DshApiServer {
       );
       const skillGestures = skillIds.map((name) => `/${name}`);
       const promptText = skillGestures.length > 0 ? `${text}\n\n${skillGestures.join(' ')}` : text;
+<<<<<<< HEAD
       this.#traceTurn(conversation.id, 'prompt_sent');
+=======
+>>>>>>> bc237b88135c02f5fff8c017bcef5645267a5591
       const stopReason = await this.#bridge?.prompt(conversation.id, promptText, turnId);
       if (needsSkillInjection && session) conversation.extra.skills_injected_session_id = session.sessionId;
       const active = this.#activeTurns.get(conversation.id);
@@ -2933,7 +2966,10 @@ export class DshApiServer {
             created_at: createdAt,
           });
           await this.#persist();
+<<<<<<< HEAD
           this.#traceTurn(conversationId, 'message_accepted');
+=======
+>>>>>>> bc237b88135c02f5fff8c017bcef5645267a5591
           void this.#sendPrompt(conversation, text, turnId, assistantId, explicitSkillIds);
           responseData(response, { msg_id: userId, turn_id: turnId, runtime: conversation.runtime }, 202);
           return;

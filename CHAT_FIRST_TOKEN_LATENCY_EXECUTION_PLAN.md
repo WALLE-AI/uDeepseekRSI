@@ -59,6 +59,7 @@
 
 为每个 turn 生成统一 trace，上报或记录以下时间点：
 
+<<<<<<< HEAD
 | 阶段                  | 含义                             |
 | --------------------- | -------------------------------- |
 | `message_received`    | 后端收到发送请求                 |
@@ -73,6 +74,22 @@
 | `first_update`        | 收到首个 ACP session/update      |
 | `first_thought`       | 收到首个 thought chunk           |
 | `first_text`          | 收到首个 assistant text chunk    |
+=======
+| 阶段 | 含义 |
+| --- | --- |
+| `message_received` | 后端收到发送请求 |
+| `message_accepted` | 用户消息持久化并返回 202 |
+| `runtime_start_begin` | 开始取得 work-mode runtime |
+| `process_spawned` | dsh 子进程已 spawn |
+| `acp_initialized` | ACP initialize 返回 |
+| `session_begin` | session/new 或 resume 开始 |
+| `session_ready` | Session、MCP 和配置目录就绪 |
+| `config_ready` | 必要配置更新完成 |
+| `prompt_sent` | session/prompt 已发出 |
+| `first_update` | 收到首个 ACP session/update |
+| `first_thought` | 收到首个 thought chunk |
+| `first_text` | 收到首个 assistant text chunk |
+>>>>>>> bc237b88135c02f5fff8c017bcef5645267a5591
 | `renderer_first_text` | Renderer 实际消费首个 text frame |
 
 每条记录至少携带 `conversation_id`、`turn_id`、`work_mode`、`cold_runtime`、`resumed_session`、`mcp_count` 和 `elapsed_ms`。不得记录提示词正文、密钥或 MCP header。
@@ -84,7 +101,11 @@
 在 `DshApiServer` 或 `DshRuntimePool` 增加：
 
 ```typescript
+<<<<<<< HEAD
 Map<string, Promise<DshSession>>;
+=======
+Map<string, Promise<DshSession>>
+>>>>>>> bc237b88135c02f5fff8c017bcef5645267a5591
 ```
 
 行为要求：
@@ -141,6 +162,7 @@ MCP 优化：
 
 ## 5. 验证矩阵
 
+<<<<<<< HEAD
 | 场景                           | 关键断言                               |
 | ------------------------------ | -------------------------------------- |
 | 应用首次启动后的首个对话       | 有初始化状态；只启动一个对应 mode 进程 |
@@ -153,6 +175,20 @@ MCP 优化：
 | 固定模型与 reasoning           | 使用正确 ACP ID，跳过相同值            |
 | Session 初始化失败后重试       | pending 状态被清理，第二次可成功       |
 | 已有 Session 的后续轮次        | 不经过 spawn、initialize、session/new  |
+=======
+| 场景 | 关键断言 |
+| --- | --- |
+| 应用首次启动后的首个对话 | 有初始化状态；只启动一个对应 mode 进程 |
+| 同 mode 的第二个新对话 | 复用进程，不重复 ACP initialize |
+| 不同 mode 的首个对话 | 各自只冷启动一次 |
+| 页面 warmup 与自动首条消息并发 | 只创建一个 Session |
+| 0 个 MCP | 建立基准耗时 |
+| 内置 MCP | 能独立计算 MCP 增量 |
+| 慢速或失败 MCP | 有界超时和可定位错误，不永久无反馈 |
+| 固定模型与 reasoning | 使用正确 ACP ID，跳过相同值 |
+| Session 初始化失败后重试 | pending 状态被清理，第二次可成功 |
+| 已有 Session 的后续轮次 | 不经过 spawn、initialize、session/new |
+>>>>>>> bc237b88135c02f5fff8c017bcef5645267a5591
 
 单元和集成测试放在现有 `tests/unit/dsh-bridge/` 下，优先扩展 `lifecycle.test.ts` 与 `directApiServer.test.ts`，避免为同一行为创建零散测试文件。每个 `describe` 至少覆盖一个失败路径。
 
@@ -191,6 +227,7 @@ MCP 优化：
 - MCP 复用可能破坏 Session 隔离：没有上游生命周期保证前不得共享有状态 MCP client。
 - 提前发送 `start` 会改变 UI 事件顺序：用 turn ID 关联，并确保失败后必有 terminal event。
 - 当前工作区已有未提交的 dsh-bridge 改动；实施时应在现有改动上增量修改，不覆盖或回退这些内容。
+<<<<<<< HEAD
 
 ## 9. 本地执行基线
 
@@ -225,3 +262,5 @@ MCP 优化：
 - `start` 在本地初始化前立即发送，冷启动期间 UI 可见；各阶段输出结构化 `[dsh-latency]` 日志。
 - 首条消息在页面跳转时可能错过非持久 `request_trace`，renderer 首字日志已回退到跨路由 turn clock，并用 `trace_source` 区分来源。
 - 真实复测显示优化后的热路径页面首字 p50 为 489 ms，目标已从“数秒无反馈”降到亚秒级；后续若继续优化，应聚焦约 0.32 秒的新会话 UI 路径，而不是再次启动独立 harness 引擎。
+=======
+>>>>>>> bc237b88135c02f5fff8c017bcef5645267a5591
