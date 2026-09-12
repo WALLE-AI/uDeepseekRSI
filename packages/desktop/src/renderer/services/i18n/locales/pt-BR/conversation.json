@@ -79,6 +79,7 @@
     "deleting": "Excluindo...",
     "reorderPinned": "Arraste para reordenar a conversa fixada",
     "forkedFrom": "Bifurcada de “{{name}}”",
+    "handedOffFrom": "Repassada de “{{name}}”",
     "forkedConversation": "Conversa bifurcada",
     "archive": "Arquivar",
     "archiveSuccess": "Arquivado",

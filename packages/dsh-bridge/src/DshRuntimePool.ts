@@ -55,44 +55,94 @@ export function personaForDshWorkMode(mode: DshWorkMode): string {
   ].join(' ');
 }
 
-type DshRuntimePoolOptions = {
-  createPort: (mode: DshWorkMode) => DshAgentPort;
+/**
+ * Identity of one isolated dsh process.
+ *
+ * The expert revision is part of the key but never of the `DSH_HOME` path: editing an
+ * expert has to swap the process (so the new persona takes effect) while keeping the home
+ * (so conversations created against the old definition can still be resumed).
+ */
+export type DshRuntimeKey = {
+  mode: DshWorkMode;
+  expertName?: string;
+  expertRevision?: string;
 };
 
-/** Lazily owns one isolated DSH ACP runtime per work mode. */
+export function runtimeKeyId(key: DshRuntimeKey): string {
+  return `${key.mode}:${key.expertName ?? ''}:${key.expertRevision ?? ''}`;
+}
+
+/** The high-traffic key: every conversation opened from the home page lands here. */
+export function modeRuntimeKey(mode: DshWorkMode): DshRuntimeKey {
+  return { mode };
+}
+
+/** Fifteen minutes: long enough to survive a coffee break, short enough to bound memory. */
+const DEFAULT_RUNTIME_IDLE_MS = 15 * 60 * 1000;
+
+type DshRuntimePoolOptions = {
+  createPort: (key: DshRuntimeKey) => DshAgentPort;
+  /** Awaited before the port is created, for work a key needs on disk first. */
+  prepare?: (key: DshRuntimeKey) => Promise<void>;
+  /** Idle window before an unused runtime is disposed; `false` disables reclamation. */
+  idleMs?: number | false;
+  /** Key exempt from reclamation — the prewarmed one, which exists to stay warm. */
+  pinnedKeyId?: string;
+};
+
+/**
+ * Lazily owns one isolated DSH ACP runtime per key.
+ *
+ * Keying on the expert rather than only the work mode is what makes an expert's persona a
+ * real system prompt: `system-prompt.persona` is process-level in the ACP profile, so two
+ * experts sharing a process would share an identity.
+ */
 export class DshRuntimePool {
   readonly #createPort: DshRuntimePoolOptions['createPort'];
-  readonly #bridges = new Map<DshWorkMode, DshBridge>();
-  readonly #starting = new Map<DshWorkMode, Promise<DshBridge>>();
-  readonly #sessionStarts = new Map<string, { mode: DshWorkMode; promise: Promise<DshSession> }>();
-  readonly #conversationModes = new Map<string, DshWorkMode>();
+  readonly #prepare: DshRuntimePoolOptions['prepare'];
+  readonly #idleMs: number | false;
+  readonly #pinnedKeyId?: string;
+  readonly #bridges = new Map<string, DshBridge>();
+  readonly #starting = new Map<string, Promise<DshBridge>>();
+  readonly #sessionStarts = new Map<string, { keyId: string; promise: Promise<DshSession> }>();
+  readonly #conversationKeys = new Map<string, DshRuntimeKey>();
+  readonly #lastActive = new Map<string, number>();
+  #reclaimTimer: ReturnType<typeof setInterval> | null = null;
   #disposed = false;
 
   constructor(options: DshRuntimePoolOptions) {
     this.#createPort = options.createPort;
+    this.#prepare = options.prepare;
+    this.#idleMs = options.idleMs ?? DEFAULT_RUNTIME_IDLE_MS;
+    if (options.pinnedKeyId !== undefined) this.#pinnedKeyId = options.pinnedKeyId;
   }
 
   getSession(conversationId: string): DshSession | undefined {
-    const mode = this.#conversationModes.get(conversationId);
-    return mode ? this.#bridges.get(mode)?.getSession(conversationId) : undefined;
+    const key = this.#conversationKeys.get(conversationId);
+    return key ? this.#bridges.get(runtimeKeyId(key))?.getSession(conversationId) : undefined;
   }
 
-  isWarm(mode: DshWorkMode): boolean {
-    return this.#bridges.has(mode);
+  isWarm(key: DshRuntimeKey): boolean {
+    return this.#bridges.has(runtimeKeyId(key));
   }
 
-  async warm(mode: DshWorkMode): Promise<void> {
-    await this.#bridge(mode);
+  /** Keys with a live runtime right now — the number this pool is judged on. */
+  warmKeyIds(): string[] {
+    return [...this.#bridges.keys()];
+  }
+
+  async warm(key: DshRuntimeKey): Promise<void> {
+    await this.#bridge(key);
   }
 
   async createSession(
     conversationId: string,
     cwd: string,
-    mode: DshWorkMode,
+    key: DshRuntimeKey,
     mcpServers?: readonly DshMcpServer[]
   ): Promise<DshSession> {
-    return await this.#startSession(conversationId, mode, async () => {
-      const bridge = await this.#bridge(mode);
+    return await this.#startSession(conversationId, key, async () => {
+      const bridge = await this.#bridge(key);
       return await bridge.createSession(conversationId, cwd, mcpServers);
     });
   }
@@ -101,81 +151,152 @@ export class DshRuntimePool {
     conversationId: string,
     sessionId: string,
     cwd: string,
-    mode: DshWorkMode,
+    key: DshRuntimeKey,
     mcpServers?: readonly DshMcpServer[]
   ): Promise<DshSession> {
-    return await this.#startSession(conversationId, mode, async () => {
-      const bridge = await this.#bridge(mode);
+    return await this.#startSession(conversationId, key, async () => {
+      const bridge = await this.#bridge(key);
       return await bridge.resumeSession(conversationId, sessionId, cwd, mcpServers);
     });
   }
 
   async prompt(conversationId: string, text: string, turnId?: string): Promise<BridgeStopReason> {
-    return await this.#conversationBridge(conversationId).prompt(conversationId, text, turnId);
+    const bridge = this.#conversationBridge(conversationId);
+    this.#touch(conversationId);
+    return await bridge.prompt(conversationId, text, turnId);
   }
 
   async cancel(conversationId: string): Promise<boolean> {
-    return await this.#conversationBridge(conversationId).cancel(conversationId);
+    const bridge = this.#conversationBridge(conversationId);
+    this.#touch(conversationId);
+    return await bridge.cancel(conversationId);
   }
 
   async setConfigOption(conversationId: string, configId: string, value: string): Promise<DshSession> {
-    return await this.#conversationBridge(conversationId).setConfigOption(conversationId, configId, value);
+    const bridge = this.#conversationBridge(conversationId);
+    this.#touch(conversationId);
+    return await bridge.setConfigOption(conversationId, configId, value);
   }
 
   async closeSession(conversationId: string): Promise<void> {
     await this.#sessionStarts.get(conversationId)?.promise.catch((): undefined => undefined);
-    const bridge = this.#conversationBridge(conversationId);
+    const key = this.#conversationKeys.get(conversationId);
+    this.#conversationKeys.delete(conversationId);
+    // A reclaimed runtime has already closed everything it owned; nothing left to close.
+    const bridge = key ? this.#bridges.get(runtimeKeyId(key)) : undefined;
+    if (!bridge) return;
     await bridge.closeSession(conversationId);
-    this.#conversationModes.delete(conversationId);
+  }
+
+  /**
+   * Disposes one runtime by key.
+   *
+   * Needed when a setting changes the composition a process was booted with: DSH reads its
+   * patch stack once at startup, so the only way a new composition takes effect is a new
+   * process. Sessions are persisted by dsh, so the next prompt resumes them.
+   */
+  async disposeRuntime(key: DshRuntimeKey): Promise<boolean> {
+    const keyId = runtimeKeyId(key);
+    const bridge = this.#bridges.get(keyId);
+    if (!bridge) return false;
+    this.#bridges.delete(keyId);
+    this.#lastActive.delete(keyId);
+    await bridge.dispose().catch((): undefined => undefined);
+    return true;
+  }
+
+  /**
+   * Disposes runtimes idle for longer than the configured window.
+   *
+   * Safe because dsh owns session persistence: the next prompt resumes the stored session
+   * in a fresh process, paying one cold start instead of holding a process per expert for
+   * the lifetime of the app.
+   */
+  async reclaimIdle(now = Date.now()): Promise<string[]> {
+    if (this.#disposed || this.#idleMs === false) return [];
+    const idleMs = this.#idleMs;
+    const reclaimed: string[] = [];
+    // Deleting the current entry mid-iteration is safe for a Map, and a runtime created
+    // during an await below carries a fresh timestamp, so it fails the idle check anyway.
+    for (const [keyId, bridge] of this.#bridges) {
+      if (keyId === this.#pinnedKeyId) continue;
+      if (this.#starting.has(keyId)) continue;
+      if (now - (this.#lastActive.get(keyId) ?? now) < idleMs) continue;
+      this.#bridges.delete(keyId);
+      this.#lastActive.delete(keyId);
+      reclaimed.push(keyId);
+      // eslint-disable-next-line no-await-in-loop
+      await bridge.dispose().catch((): undefined => undefined);
+    }
+    return reclaimed;
   }
 
   async dispose(): Promise<void> {
     if (this.#disposed) return;
     this.#disposed = true;
+    if (this.#reclaimTimer) clearInterval(this.#reclaimTimer);
+    this.#reclaimTimer = null;
     await Promise.allSettled(this.#starting.values());
     await Promise.allSettled([...this.#sessionStarts.values()].map(({ promise }) => promise));
     const bridges = [...this.#bridges.values()];
     this.#bridges.clear();
     this.#starting.clear();
     this.#sessionStarts.clear();
-    this.#conversationModes.clear();
+    this.#conversationKeys.clear();
+    this.#lastActive.clear();
     await Promise.all(bridges.map((bridge) => bridge.dispose()));
+  }
+
+  #touch(conversationId: string): void {
+    const key = this.#conversationKeys.get(conversationId);
+    if (key) this.#lastActive.set(runtimeKeyId(key), Date.now());
   }
 
   async #startSession(
     conversationId: string,
-    mode: DshWorkMode,
+    key: DshRuntimeKey,
     create: () => Promise<DshSession>
   ): Promise<DshSession> {
     const existing = this.getSession(conversationId);
     if (existing) return existing;
+    const keyId = runtimeKeyId(key);
     const pending = this.#sessionStarts.get(conversationId);
     if (pending) {
-      if (pending.mode !== mode) throw new Error(`Conversation runtime mode changed during startup: ${conversationId}`);
+      if (pending.keyId !== keyId) {
+        throw new Error(`Conversation runtime key changed during startup: ${conversationId}`);
+      }
       return await pending.promise;
     }
 
     const promise = create()
       .then((session) => {
         if (this.#disposed) throw new Error('The dsh runtime pool is disposed.');
-        this.#conversationModes.set(conversationId, mode);
+        this.#conversationKeys.set(conversationId, key);
+        this.#lastActive.set(keyId, Date.now());
         return session;
       })
       .finally(() => this.#sessionStarts.delete(conversationId));
-    this.#sessionStarts.set(conversationId, { mode, promise });
+    this.#sessionStarts.set(conversationId, { keyId, promise });
     return await promise;
   }
 
-  async #bridge(mode: DshWorkMode): Promise<DshBridge> {
+  async #bridge(key: DshRuntimeKey): Promise<DshBridge> {
     if (this.#disposed) throw new Error('The dsh runtime pool is disposed.');
-    const existing = this.#bridges.get(mode);
-    if (existing) return existing;
+    const keyId = runtimeKeyId(key);
+    const existing = this.#bridges.get(keyId);
+    if (existing) {
+      this.#lastActive.set(keyId, Date.now());
+      return existing;
+    }
 
-    const pending = this.#starting.get(mode);
+    const pending = this.#starting.get(keyId);
     if (pending) return await pending;
 
     const starting = (async () => {
-      const bridge = new DshBridge({ port: this.#createPort(mode) });
+      // Guarded rather than `await this.#prepare?.()`: an unconditional await would push
+      // port creation past a microtask for the no-expert key, which has nothing to prepare.
+      if (this.#prepare) await this.#prepare(key);
+      const bridge = new DshBridge({ port: this.#createPort(key) });
       try {
         await bridge.start();
       } catch (error) {
@@ -186,16 +307,26 @@ export class DshRuntimePool {
         await bridge.dispose();
         throw new Error('The dsh runtime pool is disposed.');
       }
-      this.#bridges.set(mode, bridge);
+      this.#bridges.set(keyId, bridge);
+      this.#lastActive.set(keyId, Date.now());
+      this.#scheduleReclaim();
       return bridge;
-    })().finally(() => this.#starting.delete(mode));
-    this.#starting.set(mode, starting);
+    })().finally(() => this.#starting.delete(keyId));
+    this.#starting.set(keyId, starting);
     return await starting;
   }
 
+  /** One unref'd interval for the whole pool, started with the first runtime. */
+  #scheduleReclaim(): void {
+    if (this.#reclaimTimer || this.#idleMs === false) return;
+    const period = Math.max(30_000, Math.floor(this.#idleMs / 3));
+    this.#reclaimTimer = setInterval(() => void this.reclaimIdle(), period);
+    this.#reclaimTimer.unref?.();
+  }
+
   #conversationBridge(conversationId: string): DshBridge {
-    const mode = this.#conversationModes.get(conversationId);
-    const bridge = mode ? this.#bridges.get(mode) : undefined;
+    const key = this.#conversationKeys.get(conversationId);
+    const bridge = key ? this.#bridges.get(runtimeKeyId(key)) : undefined;
     if (!bridge) throw new Error(`No dsh runtime for conversation: ${conversationId}`);
     return bridge;
   }

@@ -69,7 +69,8 @@ type TMessageType =
   | 'plan'
   | 'thinking'
   | 'available_commands'
-  | 'acp_terminal_output';
+  | 'acp_terminal_output'
+  | 'expert_activity';
 
 interface IMessage<T extends TMessageType, Content extends Record<string, any>> {
   /**
@@ -341,6 +342,28 @@ export interface AcpTerminalOutputContent {
 
 export type IMessageAcpTerminalOutput = IMessage<'acp_terminal_output', AcpTerminalOutputContent>;
 
+/**
+ * One expert-team member working inside a turn.
+ *
+ * ACP carries a delegated child only as the delegating tool's own call frames, so this is
+ * everything the UI can know: the member started, it is still going (a heartbeat the
+ * backend emits so a minutes-long delegation is never silent), and how it ended.
+ * Stream-only — never persisted, because the lead's summary is the durable record.
+ */
+export interface ExpertActivityContent {
+  phase: 'started' | 'progress' | 'done';
+  tool_call_id: string;
+  tool_name: string;
+  /** Team member id, or null for the engine's own generic delegation tools. */
+  member_id: string | null;
+  /** The brief the lead handed over, when the tool arguments carried one. */
+  task: string | null;
+  elapsed_ms: number;
+  status?: string;
+}
+
+export type IMessageExpertActivity = IMessage<'expert_activity', ExpertActivityContent>;
+
 export const mergeAcpToolCallContent = (
   existing: IMessageAcpToolCall['content'],
   incoming: IMessageAcpToolCall['content']
@@ -430,7 +453,8 @@ export type TMessage =
   | IMessagePlan
   | IMessageThinking
   | IMessageAvailableCommands
-  | IMessageAcpTerminalOutput;
+  | IMessageAcpTerminalOutput
+  | IMessageExpertActivity;
 
 // 统一所有需要用户交互的用户类型
 export interface IConfirmation<Option extends any = any> {
@@ -866,6 +890,20 @@ const transformMessageInner = (message: IResponseMessage): TMessage | undefined 
         content: message.data as any,
       };
     }
+    case 'expert_activity': {
+      const activity = message.data as ExpertActivityContent;
+      return {
+        // One card per delegated call: the backend's msg_id already ends in the tool call
+        // id, so every phase frame of the same delegation lands on the same row.
+        id: `expert:${message.msg_id}`,
+        type: 'expert_activity',
+        msg_id: message.msg_id,
+        position: 'left',
+        conversation_id: message.conversation_id,
+        created_at,
+        content: activity,
+      };
+    }
     case 'plan': {
       return {
         // Deterministic and matching the persisted row's primary key
@@ -1075,6 +1113,15 @@ export const composeMessage = (
       };
       return updateMessage(list.length - 1, { ...last, content: merged });
     }
+    return pushMessage(message);
+  }
+
+  // One card per delegated call, wherever it already sits in the list: two members working
+  // in parallel interleave their heartbeats, so last-message merging would stack a fresh
+  // row every ten seconds instead of updating the two cards that are actually running.
+  if (message.type === 'expert_activity') {
+    const existing = list.findIndex((item) => item.type === 'expert_activity' && item.id === message.id);
+    if (existing >= 0) return updateMessage(existing, message);
     return pushMessage(message);
   }
 

@@ -83,6 +83,7 @@
     "deleting": "Удаление...",
     "reorderPinned": "Перетащите, чтобы изменить порядок закреплённых бесед",
     "forkedFrom": "Ответвление от «{{name}}»",
+    "handedOffFrom": "Передан из «{{name}}»",
     "forkedConversation": "Ответвлённая беседа",
     "archive": "Архивировать",
     "archiveSuccess": "Архивировано",

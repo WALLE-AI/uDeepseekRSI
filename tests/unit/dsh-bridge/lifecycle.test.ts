@@ -2,8 +2,10 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   DshBridge,
   DshRuntimePool,
+  modeRuntimeKey,
   normalizeDshWorkMode,
   personaForDshWorkMode,
+  runtimeKeyId,
   type DshAgentPort,
 } from '../../../packages/dsh-bridge/src';
 
@@ -104,40 +106,40 @@ describe('dsh work mode runtime pool', () => {
     const createPort = vi.fn(() => fakePort({ initialize }));
     const pool = new DshRuntimePool({ createPort });
 
-    const first = pool.warm('coding');
-    const second = pool.warm('coding');
-    expect(pool.isWarm('coding')).toBe(false);
+    const first = pool.warm(modeRuntimeKey('coding'));
+    const second = pool.warm(modeRuntimeKey('coding'));
+    expect(pool.isWarm(modeRuntimeKey('coding'))).toBe(false);
     expect(createPort).toHaveBeenCalledTimes(1);
     expect(initialize).toHaveBeenCalledTimes(1);
 
     initialized.resolve({ protocolVersion: 1, capabilities: {} });
     await Promise.all([first, second]);
-    expect(pool.isWarm('coding')).toBe(true);
-    await pool.createSession('coding-conversation', 'D:/code', 'coding');
+    expect(pool.isWarm(modeRuntimeKey('coding'))).toBe(true);
+    await pool.createSession('coding-conversation', 'D:/code', modeRuntimeKey('coding'));
     expect(initialize).toHaveBeenCalledTimes(1);
     await pool.dispose();
   });
 
   it('starts each mode lazily and keeps conversations on their selected runtime', async () => {
-    const createdModes: string[] = [];
+    const createdKeys: string[] = [];
     const ports = new Map<string, DshAgentPort>();
     const pool = new DshRuntimePool({
-      createPort: (mode) => {
-        createdModes.push(mode);
+      createPort: (key) => {
+        createdKeys.push(runtimeKeyId(key));
         const port = fakePort({
-          newSession: vi.fn(async () => ({ sessionId: `${mode}-session`, configOptions: [] })),
+          newSession: vi.fn(async () => ({ sessionId: `${key.mode}-session`, configOptions: [] })),
         });
-        ports.set(mode, port);
+        ports.set(runtimeKeyId(key), port);
         return port;
       },
     });
 
-    expect(createdModes).toEqual([]);
-    await pool.createSession('office-conversation', 'D:/office', 'office');
-    await pool.createSession('coding-conversation', 'D:/code', 'coding');
-    await pool.createSession('research-conversation', 'D:/research', 'research');
+    expect(createdKeys).toEqual([]);
+    await pool.createSession('office-conversation', 'D:/office', modeRuntimeKey('office'));
+    await pool.createSession('coding-conversation', 'D:/code', modeRuntimeKey('coding'));
+    await pool.createSession('research-conversation', 'D:/research', modeRuntimeKey('research'));
 
-    expect(createdModes).toEqual(['office', 'coding', 'research']);
+    expect(createdKeys).toEqual(['office::', 'coding::', 'research::']);
     expect(pool.getSession('office-conversation')?.sessionId).toBe('office-session');
     expect(pool.getSession('coding-conversation')?.sessionId).toBe('coding-session');
     expect(pool.getSession('research-conversation')?.sessionId).toBe('research-session');
@@ -147,18 +149,110 @@ describe('dsh work mode runtime pool', () => {
 
   it('keeps the coding runtime usable when office initialization fails', async () => {
     const pool = new DshRuntimePool({
-      createPort: (mode) =>
-        mode === 'office'
+      createPort: (key) =>
+        key.mode === 'office'
           ? fakePort({ initialize: vi.fn(async () => ({ protocolVersion: 2, capabilities: {} })) })
           : fakePort({ newSession: vi.fn(async () => ({ sessionId: 'coding-session', configOptions: [] })) }),
     });
 
-    await expect(pool.createSession('office-conversation', 'D:/office', 'office')).rejects.toThrow(
+    await expect(pool.createSession('office-conversation', 'D:/office', modeRuntimeKey('office'))).rejects.toThrow(
       'Unsupported ACP protocol version'
     );
-    await expect(pool.createSession('coding-conversation', 'D:/code', 'coding')).resolves.toMatchObject({
-      sessionId: 'coding-session',
+    await expect(pool.createSession('coding-conversation', 'D:/code', modeRuntimeKey('coding'))).resolves.toMatchObject(
+      {
+        sessionId: 'coding-session',
+      }
+    );
+    await pool.dispose();
+  });
+
+  it('gives two experts in one mode separate runtimes and shares one across revisions of none', async () => {
+    const createdKeys: string[] = [];
+    const pool = new DshRuntimePool({
+      createPort: (key) => {
+        createdKeys.push(runtimeKeyId(key));
+        return fakePort();
+      },
     });
+
+    await pool.createSession('a', 'D:/office', { mode: 'office', expertName: 'scout', expertRevision: 'r1' });
+    await pool.createSession('b', 'D:/office', { mode: 'office', expertName: 'editor', expertRevision: 'r1' });
+    await pool.createSession('c', 'D:/office', modeRuntimeKey('office'));
+    await pool.createSession('d', 'D:/office', modeRuntimeKey('office'));
+
+    expect(createdKeys).toEqual(['office:scout:r1', 'office:editor:r1', 'office::']);
+    await pool.dispose();
+  });
+
+  it('routes a conversation to a new runtime when the expert definition changes', async () => {
+    const createdKeys: string[] = [];
+    const pool = new DshRuntimePool({
+      createPort: (key) => {
+        createdKeys.push(runtimeKeyId(key));
+        return fakePort();
+      },
+    });
+
+    await pool.createSession('before', 'D:/office', { mode: 'office', expertName: 'scout', expertRevision: 'r1' });
+    await pool.createSession('after', 'D:/office', { mode: 'office', expertName: 'scout', expertRevision: 'r2' });
+
+    expect(createdKeys).toEqual(['office:scout:r1', 'office:scout:r2']);
+    await pool.dispose();
+  });
+
+  it('prepares a runtime key on disk before its port is created', async () => {
+    const order: string[] = [];
+    const pool = new DshRuntimePool({
+      prepare: async (key) => {
+        order.push(`prepare:${runtimeKeyId(key)}`);
+      },
+      createPort: (key) => {
+        order.push(`port:${runtimeKeyId(key)}`);
+        return fakePort();
+      },
+    });
+
+    await pool.warm({ mode: 'office', expertName: 'scout', expertRevision: 'r1' });
+
+    expect(order).toEqual(['prepare:office:scout:r1', 'port:office:scout:r1']);
+    await pool.dispose();
+  });
+
+  it('reclaims idle expert runtimes but never the pinned one', async () => {
+    const disposed: string[] = [];
+    const pool = new DshRuntimePool({
+      idleMs: 1_000,
+      pinnedKeyId: runtimeKeyId(modeRuntimeKey('office')),
+      createPort: (key) => fakePort({ dispose: vi.fn(async () => void disposed.push(runtimeKeyId(key))) }),
+    });
+    await pool.warm(modeRuntimeKey('office'));
+    await pool.warm({ mode: 'office', expertName: 'scout', expertRevision: 'r1' });
+
+    expect(await pool.reclaimIdle(Date.now())).toEqual([]);
+    expect(await pool.reclaimIdle(Date.now() + 2_000)).toEqual(['office:scout:r1']);
+    expect(disposed).toEqual(['office:scout:r1']);
+    expect(pool.warmKeyIds()).toEqual(['office::']);
+    await pool.dispose();
+  });
+
+  it('cold starts a reclaimed runtime on the next session instead of failing', async () => {
+    let ports = 0;
+    const pool = new DshRuntimePool({
+      idleMs: 1_000,
+      createPort: () => {
+        ports += 1;
+        return fakePort();
+      },
+    });
+    const key = { mode: 'office', expertName: 'scout', expertRevision: 'r1' } as const;
+    await pool.createSession('conversation-1', 'D:/office', key);
+    await pool.reclaimIdle(Date.now() + 2_000);
+
+    expect(pool.getSession('conversation-1')).toBeUndefined();
+    await pool.resumeSession('conversation-1', 'session-1', 'D:/office', key);
+
+    expect(ports).toBe(2);
+    expect(pool.getSession('conversation-1')?.sessionId).toBe('session-1');
     await pool.dispose();
   });
 

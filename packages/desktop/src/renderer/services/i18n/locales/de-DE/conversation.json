@@ -79,6 +79,7 @@
     "deleting": "Wird gelöscht...",
     "reorderPinned": "Ziehen, um angeheftete Unterhaltung neu anzuordnen",
     "forkedFrom": "Verzweigt von „{{name}}“",
+    "handedOffFrom": "Übergeben von „{{name}}“",
     "forkedConversation": "Verzweigte Unterhaltung",
     "archive": "Archivieren",
     "archiveSuccess": "Archiviert",

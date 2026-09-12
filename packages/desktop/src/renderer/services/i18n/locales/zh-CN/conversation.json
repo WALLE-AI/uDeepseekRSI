@@ -79,6 +79,7 @@
     "deleting": "删除中...",
     "reorderPinned": "拖动以调整置顶会话顺序",
     "forkedFrom": "分叉自「{{name}}」",
+    "handedOffFrom": "由「{{name}}」转交而来",
     "forkedConversation": "分叉会话",
     "archive": "归档",
     "archiveSuccess": "已归档",

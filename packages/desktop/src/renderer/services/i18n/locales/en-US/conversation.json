@@ -79,6 +79,7 @@
     "deleting": "Deleting...",
     "reorderPinned": "Drag to reorder pinned conversation",
     "forkedFrom": "Forked from “{{name}}”",
+    "handedOffFrom": "Handed off from “{{name}}”",
     "forkedConversation": "Forked conversation",
     "archive": "Archive",
     "archiveSuccess": "Archived",

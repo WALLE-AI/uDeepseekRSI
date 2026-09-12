@@ -88,10 +88,13 @@ describe('ExpertDetailModal', () => {
     expect(screen.getByTestId('expert-detail-modal').textContent).toContain('experts.noPrompts');
   });
 
-  it('disables summoning for a team until the delegation runtime exists', () => {
+  it('lets a team be summoned and states the permission it carries', () => {
     renderModal(expert({ name: 'rd-team', expert_type: 'team', member_count: 3, prompts: ['Build the feature'] }));
 
-    expect((screen.getByTestId('expert-detail-summon') as HTMLButtonElement).disabled).toBe(true);
-    expect((screen.getByTestId('expert-detail-prompt') as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByTestId('expert-detail-summon') as HTMLButtonElement).disabled).toBe(false);
+    expect((screen.getByTestId('expert-detail-prompt') as HTMLButtonElement).disabled).toBe(false);
+    // Members inherit the team's sandbox and never raise their own confirmation dialog,
+    // so summoning a team is a permission decision the user has to be told about.
+    expect(screen.getByTestId('expert-detail-modal').textContent).toContain('experts.teamApprovalNotice');
   });
 });

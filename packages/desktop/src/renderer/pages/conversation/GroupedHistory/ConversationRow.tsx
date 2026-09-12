@@ -21,6 +21,7 @@ import {
   Inbox,
   MessageOne,
   MoreOne,
+  PeoplesTwo,
   Pushpin,
   Robot,
   Timer,
@@ -75,6 +76,12 @@ const ConversationRow: React.FC<ConversationRowProps> = (props) => {
   const forkParentName = forkLineage?.parent_conversation_id
     ? props.resolveConversationName?.(forkLineage.parent_conversation_id)
     : undefined;
+  // Expert-handoff lineage, read the same way as the fork badge above: an expert cannot be
+  // bound to a running conversation, so continuing under one always produces a second
+  // conversation, and without this the first would just look like it went quiet.
+  const handoffFromId = (conversation.extra as { handoff_from_conversation_id?: string } | undefined)
+    ?.handoff_from_conversation_id;
+  const handoffSourceName = handoffFromId ? props.resolveConversationName?.(handoffFromId) : undefined;
   const cronStatus = getJobStatus(conversation.id);
   const siderTooltipProps = getSiderTooltipProps(tooltipEnabled);
   const inlineNameTooltipEnabled = !collapsed && !isMobile && !!conversation.name;
@@ -245,6 +252,23 @@ const ConversationRow: React.FC<ConversationRowProps> = (props) => {
                 >
                   <span className='flex-shrink-0 line-height-0 text-t-tertiary' data-testid='conversation-fork-badge'>
                     <ForkBranchIcon size={12} />
+                  </span>
+                </Tooltip>
+              )}
+              {handoffFromId && (
+                <Tooltip
+                  content={
+                    handoffSourceName
+                      ? t('conversation.history.handedOffFrom', { name: handoffSourceName })
+                      : t('experts.handoffFrom')
+                  }
+                  position='top'
+                >
+                  <span
+                    className='flex-shrink-0 line-height-0 text-t-tertiary'
+                    data-testid='conversation-handoff-badge'
+                  >
+                    <PeoplesTwo theme='outline' size='12' fill='currentColor' />
                   </span>
                 </Tooltip>
               )}

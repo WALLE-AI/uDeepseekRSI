@@ -79,6 +79,7 @@
     "deleting": "Suppression...",
     "reorderPinned": "Faites glisser pour réorganiser la conversation épinglée",
     "forkedFrom": "Bifurquée depuis « {{name}} »",
+    "handedOffFrom": "Transmise depuis « {{name}} »",
     "forkedConversation": "Conversation bifurquée",
     "archive": "Archiver",
     "archiveSuccess": "Archivé",

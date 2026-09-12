@@ -18,6 +18,7 @@ import MessageAcpPermission from '@renderer/pages/conversation/Messages/acp/Mess
 import MessageQuestion from './MessageQuestion';
 import MessagePermission from './components/MessagePermission';
 import MessageAcpTerminalOutput from '@renderer/pages/conversation/Messages/acp/MessageAcpTerminalOutput';
+import MessageExpertActivity from '@renderer/pages/conversation/Messages/acp/MessageExpertActivity';
 import MessageAcpToolCall from '@renderer/pages/conversation/Messages/acp/MessageAcpToolCall';
 import classNames from 'classnames';
 import React, { createContext, useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -304,6 +305,8 @@ const MessageItem: React.FC<{
           return <MessageAcpToolCall message={message}></MessageAcpToolCall>;
         case 'acp_terminal_output':
           return <MessageAcpTerminalOutput message={message}></MessageAcpTerminalOutput>;
+        case 'expert_activity':
+          return <MessageExpertActivity message={message}></MessageExpertActivity>;
         case 'thinking':
           return <MessageThinking message={message}></MessageThinking>;
         // Both are filtered out of `processedList` above and never reach this

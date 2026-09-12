@@ -21,6 +21,7 @@ import {
   scanItemDto,
   summaryDto,
   writeRequestFromBody,
+  type ExpertDetail,
   type ExpertImportRecord,
 } from './experts';
 import {
@@ -33,12 +34,22 @@ import {
 } from './packageTree';
 import { createDshConnection } from './createDshConnection';
 import {
+  EXPERT_PATCH_FILE,
+  expertRuntimeProfile,
+  isDelegationToolName,
+  memberIdFromDelegationTool,
+  type ExpertRuntimeProfile,
+} from './experts/runtime';
+import { parseToolCallEnvelope } from './updateMapper';
+import {
   assistantIdForWorkMode,
   DSH_WORK_MODES,
   DshRuntimePool,
+  modeRuntimeKey,
   normalizeDshWorkMode,
-  personaForDshWorkMode,
+  runtimeKeyId,
   workModeFromAssistantId,
+  type DshRuntimeKey,
   type DshWorkMode,
 } from './DshRuntimePool';
 import { copyExternalFiles, executeProjectFsRequest, projectSnapshots } from './projectFsService';
@@ -245,6 +256,23 @@ type PendingPermission = {
   resolve: (decision: BridgePermissionDecision) => void;
 };
 
+/**
+ * Delegation calls seen on the wire but not yet settled.
+ *
+ * `dsh-base` mounts `subagent` as `backgroundMode: continuable`, so a turn's `stopReason`
+ * can arrive while a child is still working. The engine's own `subagent/start|end` events
+ * never cross ACP, so the only evidence we get is the delegating tool's own call frames.
+ */
+type DelegationTracker = {
+  inflight: Map<string, { toolName: string; memberId?: string; task?: string; startedAt: number }>;
+  settled: Set<() => void>;
+  /** Drives the progress heartbeat while anything is in flight. */
+  heartbeat: ReturnType<typeof setInterval> | null;
+};
+
+/** How often a working expert reports in, so a long delegation is never silent. */
+const DELEGATION_HEARTBEAT_MS = 10_000;
+
 export type DshApiServerOptions = {
   host?: string;
   port?: number;
@@ -261,15 +289,24 @@ export type DshApiServerOptions = {
   credentialStore?: ProviderCredentialStore;
   authToken?: string;
   prewarmMode?: DshWorkMode | false;
+  /** How long a turn waits for in-flight delegated work after the model stops. */
+  delegationSettleMs?: number;
+  /** Idle window before an unused expert runtime is reclaimed; `false` keeps them warm. */
+  runtimeIdleMs?: number | false;
   agentPortFactory?: (
     handlers: {
       onUpdate: (update: BridgeUpdate) => void;
       onPermissionRequest: (request: BridgePermissionRequest) => Promise<BridgePermissionDecision>;
     },
-    mode: DshWorkMode
+    mode: DshWorkMode,
+    key: DshRuntimeKey
   ) => DshAgentPort;
 };
 
+/** Client-settings key holding `{ office, coding, research }` delegation switches. */
+export const EXPERT_DELEGATION_SETTING = 'expert_delegation';
+/** Long enough for a real delegated research pass, short enough to never hang a turn. */
+const DEFAULT_DELEGATION_SETTLE_MS = 10 * 60 * 1000;
 const DEFAULT_DSH_PROVIDER_ID = 'deepseek-official';
 const GATEWAY_DSH_PROVIDER_ID = 'aionui-gateway';
 const DEFAULT_MODEL_ID = 'deepseek-v4-flash';
@@ -614,6 +651,26 @@ function extractText(payload: unknown): string {
   return '';
 }
 
+/**
+ * The task a delegation tool was asked to do, for the expert card's headline.
+ *
+ * dsh puts the model's raw tool arguments on the `tool_call` frame, and the delegation
+ * tools name the brief differently (`prompt` for `subagent`, `description` in some
+ * presets), so the first recognisable string wins and an unknown shape degrades to no
+ * headline rather than to a wall of JSON.
+ */
+function delegatedTask(payload: unknown): string | undefined {
+  if (!payload || typeof payload !== 'object') return undefined;
+  const input = (payload as Record<string, unknown>).rawInput ?? (payload as Record<string, unknown>).raw_input;
+  if (!input || typeof input !== 'object') return undefined;
+  const record = input as Record<string, unknown>;
+  for (const field of ['prompt', 'description', 'task', 'instructions']) {
+    const value = record[field];
+    if (typeof value === 'string' && value.trim()) return value.trim().slice(0, 300);
+  }
+  return undefined;
+}
+
 function responseData(response: ServerResponse, data: unknown, status = 200): void {
   response.writeHead(status, {
     'Access-Control-Allow-Headers': 'Content-Type, X-AionUI-Backend-Token',
@@ -688,6 +745,8 @@ export class DshApiServer {
   readonly #clients = new Set<WebSocket>();
   readonly #activeTurns = new Map<string, ActiveTurn>();
   readonly #pendingPermissions = new Map<string, PendingPermission>();
+  readonly #delegations = new Map<string, DelegationTracker>();
+  readonly #runtimeProfiles = new Map<string, { profile: ExpertRuntimeProfile; catalogRevision: number }>();
   readonly #sessionStarts = new Map<string, Promise<DshSession>>();
   readonly #fsWatchers = new Map<WebSocket, Map<string, FSWatcher>>();
   readonly #workspacePreview: WorkspacePreviewService;
@@ -777,8 +836,223 @@ export class DshApiServer {
     this.#server = server;
     this.#wsServer = wsServer;
     const prewarmMode = this.#options.prewarmMode === undefined ? 'office' : this.#options.prewarmMode;
-    if (prewarmMode) void this.#warmRuntime(prewarmMode, 'backend_start');
+    // The prewarm target is the no-expert key: that is the entry point for every
+    // conversation started from the home page, which is the overwhelming majority.
+    if (prewarmMode) void this.#warmRuntime(modeRuntimeKey(prewarmMode), 'backend_start');
     return this.#port;
+  }
+
+  /**
+   * The runtime profile for a key, cached per key id.
+   *
+   * Resolved once per runtime rather than per session because it reads the expert package
+   * off disk, and the whole point of the revision being in the key is that a cached
+   * profile can never go stale: an edited expert produces a different key.
+   */
+  async #runtimeProfile(key: DshRuntimeKey): Promise<ExpertRuntimeProfile> {
+    const keyId = runtimeKeyId(key);
+    const cached = this.#runtimeProfiles.get(keyId);
+    // An expert key carries its revision, so its profile can never go stale. A work-mode
+    // key with delegation on is built from the whole catalog, so it has to follow it.
+    if (cached && (key.expertName !== undefined || cached.catalogRevision === this.#state.catalogRevision)) {
+      return cached.profile;
+    }
+    const expert = key.expertName
+      ? await this.#experts.get(key.expertName).catch((): undefined => undefined)
+      : undefined;
+    const modeDelegates =
+      !key.expertName && this.#delegationEnabled(key.mode) ? await this.#delegatesForMode(key.mode) : [];
+    const profile = expertRuntimeProfile({
+      key,
+      ...(expert ? { expert } : {}),
+      dshHome: this.#options.dshHome,
+      cwd: this.#options.cwd,
+      skillsDir: this.#skillsDir(),
+      sharedExpertSkillDirs: this.#expertSkillDirs,
+      modeDelegates,
+    });
+    this.#runtimeProfiles.set(keyId, { profile, catalogRevision: this.#state.catalogRevision });
+    return profile;
+  }
+
+  /**
+   * Persists one new conversation and starts preparing its session.
+   *
+   * Shared by the create route and the expert handoff: a handoff is literally "the same
+   * workspace, a new conversation, a different expert", so it has to produce a row the
+   * rest of the app cannot tell apart from a normally created one.
+   */
+  async #createConversation(options: {
+    id?: string;
+    name?: string;
+    workMode: DshWorkMode;
+    assistantId: string;
+    assistantName: string;
+    capabilitySnapshot: ConversationCapabilitySnapshot;
+    extra: Record<string, unknown>;
+    requestedWorkspace: string;
+    createdAt: number;
+  }): Promise<StoredConversation> {
+    const canonicalWorkspace = await canonicalizeWorkspace(options.requestedWorkspace);
+    const project = ensureWorkspaceProject(this.#state.projects, canonicalWorkspace);
+    const conversation: StoredConversation = {
+      id: options.id ?? randomUUID().slice(0, 8),
+      name: options.name ?? options.assistantName,
+      type: 'acp',
+      status: 'pending',
+      source: 'aionui',
+      pinned: false,
+      assistant: {
+        id: options.assistantId,
+        source: 'dsh',
+        name: options.assistantName,
+        avatar: '',
+        backend: 'acp',
+      },
+      created_at: options.createdAt,
+      modified_at: options.createdAt,
+      extra: {
+        ...options.extra,
+        workspace: canonicalWorkspace,
+        backend: 'acp',
+        current_model_id: options.capabilitySnapshot.model ?? this.#modelOptions()[0]?.id ?? DEFAULT_MODEL_ID,
+        work_mode: options.workMode,
+        capability_snapshot: options.capabilitySnapshot,
+      },
+      project_id: project.id,
+      runtime: idleRuntime(),
+      prompt_capability: { image: false, audio: false },
+    };
+    this.#state.conversations.push(conversation);
+    this.#state.workspaceBindings.push({
+      conversationId: conversation.id,
+      projectId: project.id,
+      workspacePeId: project.workspacePeId,
+      canonicalPath: canonicalWorkspace,
+      displayPath: options.requestedWorkspace,
+      revision: 1,
+    });
+    this.#state.messages[conversation.id] = [];
+    await this.#persist();
+    if (this.#options.prewarmMode !== false) {
+      void this.#ensureSession(conversation).catch((error: unknown) => {
+        console.warn(
+          `[dsh-bridge] Failed to prepare ${options.workMode} session for conversation ${conversation.id} (${error instanceof Error ? error.name : 'UnknownError'}).`
+        );
+      });
+    }
+    this.#emit('conversation.listChanged', {
+      conversation_id: conversation.id,
+      action: 'created',
+      source: 'aionui',
+    });
+    return conversation;
+  }
+
+  /**
+   * Moves a conversation's work to an expert by starting a fresh one beside it.
+   *
+   * It cannot be done in place. After an expert becomes a runtime key, a conversation is
+   * bound to one dsh process and one session inside it, and rebinding would orphan the
+   * stored session. So the handoff is the honest shape of the operation: same workspace,
+   * new conversation, the summary carried across, the original left intact.
+   */
+  async #handoffToExpert(source: StoredConversation, expertId: string): Promise<StoredConversation> {
+    const workMode = normalizeDshWorkMode(source.extra.work_mode, source.assistant.id);
+    const expert = await this.#experts.resolveForMode(expertId, workMode);
+    const capabilitySnapshot = this.#conversationCapabilities(source);
+    capabilitySnapshot.expertId = expert.name;
+    capabilitySnapshot.expertRevision = expert.revision;
+    capabilitySnapshot.resolvedAt = Date.now();
+    const created = await this.#createConversation({
+      workMode,
+      assistantId: assistantIdForWorkMode(workMode),
+      assistantName: this.#workModeName(workMode),
+      capabilitySnapshot,
+      extra: { handoff_from_conversation_id: source.id },
+      requestedWorkspace:
+        typeof source.extra.workspace === 'string' && source.extra.workspace
+          ? source.extra.workspace
+          : this.#options.cwd,
+      createdAt: Date.now(),
+    });
+    // Delivered as the first user message rather than hidden context: the expert has to
+    // act on it, and a user who reopens the conversation later must see what it was told.
+    const summary = this.#handoffSummary(source);
+    (this.#state.messages[created.id] ??= []).push({
+      id: randomUUID().slice(0, 8),
+      conversation_id: created.id,
+      msg_id: randomUUID().slice(0, 8),
+      type: 'text',
+      content: { content: summary },
+      position: 'right',
+      status: 'finish',
+      hidden: false,
+      created_at: Date.now(),
+    });
+    await this.#persist();
+    return created;
+  }
+
+  /**
+   * The context the receiving expert needs, assembled from what is already stored.
+   *
+   * Deterministic on purpose: asking the model for a summary would add a paid round trip
+   * and a failure mode to an action the user expects to be instant, and the three things
+   * that actually matter — the original ask, where the work lives, and where it got to —
+   * are all already on disk.
+   */
+  #handoffSummary(source: StoredConversation): string {
+    const messages = this.#state.messages[source.id] ?? [];
+    const text = (message: StoredMessage): string => {
+      const content = message.content;
+      if (!content || typeof content !== 'object') return '';
+      const value = (content as Record<string, unknown>).content;
+      return typeof value === 'string' ? value.trim() : '';
+    };
+    const originalAsk = messages.find((message) => message.position === 'right' && text(message));
+    const lastAnswer = messages.findLast((message) => message.position === 'left' && text(message));
+    const lines = ['以下是从上一段会话转交过来的上下文，请据此继续，不要让用户重述。'];
+    if (typeof source.extra.workspace === 'string') lines.push('', `工作目录：${source.extra.workspace}`);
+    if (originalAsk) lines.push('', '原始目标：', text(originalAsk).slice(0, 2_000));
+    if (lastAnswer) lines.push('', '上一段会话的最新结论：', text(lastAnswer).slice(0, 4_000));
+    return lines.join('\n');
+  }
+
+  /** Full details of every solo expert in a mode; broken packages are skipped, not fatal. */
+  async #delegatesForMode(mode: DshWorkMode): Promise<ExpertDetail[]> {
+    const summaries = await this.#experts.list({ mode, type: 'agent' });
+    const details = await Promise.all(
+      summaries.map((summary) => this.#experts.get(summary.name).catch((): undefined => undefined))
+    );
+    return details.filter((detail): detail is ExpertDetail => detail !== undefined);
+  }
+
+  /**
+   * Whether the plain work-mode lead may call in experts.
+   *
+   * Off for every mode until the user says otherwise: the user asked a mode a question and
+   * never mentioned experts, and a delegated run costs several times a direct answer.
+   */
+  #delegationEnabled(mode: DshWorkMode): boolean {
+    const setting = this.#state.clientSettings[EXPERT_DELEGATION_SETTING];
+    if (!setting || typeof setting !== 'object' || Array.isArray(setting)) return false;
+    return (setting as Record<string, unknown>)[mode] === true;
+  }
+
+  /**
+   * Drops the work-mode runtimes whose delegation setting just changed.
+   *
+   * The delegation tools are mounted when the dsh process boots, so the switch can only
+   * take effect on a fresh process; disposing here is what makes the next conversation
+   * pick it up instead of silently keeping the old composition.
+   */
+  async #resetDelegationRuntimes(): Promise<void> {
+    for (const mode of DSH_WORK_MODES) {
+      this.#runtimeProfiles.delete(runtimeKeyId(modeRuntimeKey(mode)));
+      // eslint-disable-next-line no-await-in-loop
+      await this.#bridge?.disposeRuntime(modeRuntimeKey(mode));
+    }
   }
 
   #createRuntimePool(): DshRuntimePool {
@@ -786,35 +1060,50 @@ export class DshApiServer {
       onUpdate: (update: BridgeUpdate) => this.#handleUpdate(update),
       onPermissionRequest: (request: BridgePermissionRequest) => this.#requestPermission(request),
     };
+    const prewarmMode = this.#options.prewarmMode === undefined ? 'office' : this.#options.prewarmMode;
     return new DshRuntimePool({
-      createPort: (mode) =>
-        this.#options.agentPortFactory
-          ? this.#options.agentPortFactory(handlers, mode)
-          : createDshConnection({
-              cwd: this.#options.cwd,
-              dshHome: mode === 'coding' ? this.#options.dshHome : join(this.#options.dshHome, 'modes', mode),
-              patchPaths: this.#options.patchPaths,
-              mcpServers: this.#options.mcpServers,
-              env: {
-                ...this.#runtimeEnv,
-                AIONUI_DEEPSEEK_MODELS_JSON: JSON.stringify(this.#models.map((model) => model.id)),
-                AIONUI_DSH_PERSONA: personaForDshWorkMode(mode),
-                // Expert-private skill dirs are resolved when the backend starts. DSH reads
-                // this per process, so an expert added later only reaches a runtime that
-                // starts after it — surfaced to the user as a restart hint.
-                AIONUI_SKILLS_DIRS_JSON: JSON.stringify([this.#skillsDir(), ...this.#expertSkillDirs]),
-              },
-              onLatencyStage: ({ stage, durationMs }) => {
-                this.#logLatency({ stage, work_mode: mode, stage_duration_ms: durationMs });
-              },
-              ...handlers,
-            }),
+      ...(this.#options.runtimeIdleMs === undefined ? {} : { idleMs: this.#options.runtimeIdleMs }),
+      ...(prewarmMode ? { pinnedKeyId: runtimeKeyId(modeRuntimeKey(prewarmMode)) } : {}),
+      // The generated overlay has to exist on disk before the process that reads it spawns.
+      prepare: async (key) => {
+        const profile = await this.#runtimeProfile(key);
+        if (!profile.patchYaml) return;
+        await mkdir(profile.dshHome, { recursive: true });
+        await writeFile(join(profile.dshHome, EXPERT_PATCH_FILE), profile.patchYaml, 'utf8');
+      },
+      createPort: (key) => {
+        if (this.#options.agentPortFactory) return this.#options.agentPortFactory(handlers, key.mode, key);
+        const profile = this.#runtimeProfiles.get(runtimeKeyId(key))?.profile;
+        if (!profile) throw new Error(`No runtime profile prepared for ${runtimeKeyId(key)}`);
+        return createDshConnection({
+          cwd: this.#options.cwd,
+          dshHome: profile.dshHome,
+          patchPaths: [
+            ...(this.#options.patchPaths ?? []),
+            ...(profile.patchYaml ? [join(profile.dshHome, EXPERT_PATCH_FILE)] : []),
+          ],
+          mcpServers: this.#options.mcpServers,
+          env: {
+            ...this.#runtimeEnv,
+            AIONUI_DEEPSEEK_MODELS_JSON: JSON.stringify(this.#models.map((model) => model.id)),
+            AIONUI_DSH_PERSONA: profile.persona,
+            // Skill dirs are process-level in DSH, so an expert added after this runtime
+            // started only reaches a runtime that starts later — surfaced as a restart hint.
+            AIONUI_SKILLS_DIRS_JSON: JSON.stringify(profile.skillDirs),
+          },
+          onLatencyStage: ({ stage, durationMs }) => {
+            this.#logLatency({ stage, work_mode: key.mode, stage_duration_ms: durationMs });
+          },
+          ...handlers,
+        });
+      },
     });
   }
 
   async stop(): Promise<void> {
     for (const pending of this.#pendingPermissions.values()) pending.resolve({ cancelled: true });
     this.#pendingPermissions.clear();
+    for (const conversationId of this.#delegations.keys()) this.#discardDelegations(conversationId);
     for (const client of this.#clients) client.close();
     for (const client of this.#fsWatchers.keys()) this.#closeFsWatchers(client);
     this.#clients.clear();
@@ -832,16 +1121,17 @@ export class DshApiServer {
     this.#port = 0;
   }
 
-  async #warmRuntime(mode: DshWorkMode, source: 'backend_start' | 'conversation_created'): Promise<void> {
+  async #warmRuntime(key: DshRuntimeKey, source: 'backend_start' | 'conversation_created'): Promise<void> {
     const bridge = this.#bridge;
     if (!bridge) return;
-    const coldRuntime = !bridge.isWarm(mode);
+    const coldRuntime = !bridge.isWarm(key);
     const startedAt = Date.now();
     try {
-      await bridge.warm(mode);
+      await bridge.warm(key);
       this.#logLatency({
         stage: 'runtime_ready',
-        work_mode: mode,
+        work_mode: key.mode,
+        runtime_key: runtimeKeyId(key),
         cold_runtime: coldRuntime,
         source,
         stage_duration_ms: Date.now() - startedAt,
@@ -849,14 +1139,15 @@ export class DshApiServer {
     } catch (error) {
       this.#logLatency({
         stage: 'runtime_failed',
-        work_mode: mode,
+        work_mode: key.mode,
+        runtime_key: runtimeKeyId(key),
         cold_runtime: coldRuntime,
         source,
         stage_duration_ms: Date.now() - startedAt,
         error_kind: error instanceof Error ? error.name : 'UnknownError',
       });
       console.warn(
-        `[dsh-bridge] Failed to prewarm ${mode} runtime from ${source} (${error instanceof Error ? error.name : 'UnknownError'}).`
+        `[dsh-bridge] Failed to prewarm ${runtimeKeyId(key)} runtime from ${source} (${error instanceof Error ? error.name : 'UnknownError'}).`
       );
     }
   }
@@ -1324,15 +1615,20 @@ export class DshApiServer {
     snapshot.expertRevision = expert.revision;
   }
 
-  async #expertPreamble(expertId: string | undefined): Promise<string> {
-    if (!expertId) return '';
-    try {
-      return await this.#experts.systemPrompt(expertId);
-    } catch {
-      // A deleted or broken expert must not block the turn; the conversation degrades to
-      // its plain work mode rather than failing the user's message.
-      return '';
-    }
+  /**
+   * The runtime a conversation belongs to.
+   *
+   * The revision is carried so that editing an expert routes new conversations to a fresh
+   * process with the new persona, while the home path — which is keyed on the name alone —
+   * keeps older sessions resumable.
+   */
+  #runtimeKey(capabilities: ConversationCapabilitySnapshot, mode: DshWorkMode): DshRuntimeKey {
+    if (!capabilities.expertId) return modeRuntimeKey(mode);
+    return {
+      mode,
+      expertName: capabilities.expertId,
+      ...(capabilities.expertRevision ? { expertRevision: capabilities.expertRevision } : {}),
+    };
   }
 
   #conversationCapabilities(conversation: StoredConversation): ConversationCapabilitySnapshot {
@@ -1822,6 +2118,9 @@ export class DshApiServer {
       return;
     }
     if (update.kind === 'tool-start' || update.kind === 'tool-update') {
+      // A delegation renders as an expert card instead of a raw tool card, so the timeline
+      // shows the work once rather than twice.
+      if (this.#trackDelegation(update.conversationId, update.kind, payload, active)) return;
       const toolCallId = String(payload.toolCallId ?? payload.tool_call_id ?? `tool-${update.sequence}`);
       this.#emit('message.stream', {
         type: 'acp_tool_call',
@@ -1838,6 +2137,155 @@ export class DshApiServer {
         created_at: Date.now(),
       });
     }
+  }
+
+  /**
+   * Records a delegation call as in-flight on `tool_call` and clears it on the terminal
+   * `tool_call_update`, emitting the expert-activity frames the timeline renders.
+   *
+   * ACP reports a delegated child only as the delegating tool's own call frames — the
+   * engine's `subagent/start|end` events never cross the protocol — so this is the whole
+   * of what the UI can know about a working expert, and the heartbeat below is what keeps
+   * a minutes-long delegation from looking like a hang.
+   *
+   * Returns true when the update was a delegation, so the caller can skip the generic
+   * tool card and leave one representation of the work in the timeline.
+   */
+  #trackDelegation(
+    conversationId: string,
+    kind: 'tool-start' | 'tool-update',
+    payload: unknown,
+    active: ActiveTurn
+  ): boolean {
+    const envelope = parseToolCallEnvelope(payload);
+    if (!envelope) return false;
+    if (kind === 'tool-start') {
+      if (!isDelegationToolName(envelope.toolName)) return false;
+      const tracker: DelegationTracker = this.#delegations.get(conversationId) ?? {
+        inflight: new Map(),
+        settled: new Set(),
+        heartbeat: null,
+      };
+      const toolName = envelope.toolName ?? '';
+      const call = {
+        toolName,
+        startedAt: Date.now(),
+        ...(memberIdFromDelegationTool(toolName) ? { memberId: memberIdFromDelegationTool(toolName) } : {}),
+        ...(delegatedTask(payload) ? { task: delegatedTask(payload) } : {}),
+      };
+      tracker.inflight.set(envelope.toolCallId, call);
+      this.#delegations.set(conversationId, tracker);
+      this.#emitExpertActivity(conversationId, active, 'started', envelope.toolCallId, call);
+      this.#startDelegationHeartbeat(conversationId, active);
+      return true;
+    }
+    const tracker = this.#delegations.get(conversationId);
+    const call = tracker?.inflight.get(envelope.toolCallId);
+    if (!tracker || !call) return false;
+    // dsh reports `completed` or `failed`; anything still running keeps the call open.
+    if (envelope.status === 'pending' || envelope.status === 'in_progress') return true;
+    tracker.inflight.delete(envelope.toolCallId);
+    this.#emitExpertActivity(conversationId, active, 'done', envelope.toolCallId, call, {
+      status: envelope.status ?? 'completed',
+    });
+    if (tracker.inflight.size === 0) this.#releaseDelegationWaiters(conversationId);
+    return true;
+  }
+
+  #emitExpertActivity(
+    conversationId: string,
+    active: ActiveTurn,
+    phase: 'started' | 'progress' | 'done',
+    toolCallId: string,
+    call: { toolName: string; memberId?: string; task?: string; startedAt: number },
+    extra: Record<string, unknown> = {}
+  ): void {
+    this.#emit('message.stream', {
+      type: 'expert_activity',
+      data: {
+        phase,
+        tool_call_id: toolCallId,
+        tool_name: call.toolName,
+        member_id: call.memberId ?? null,
+        task: call.task ?? null,
+        elapsed_ms: Date.now() - call.startedAt,
+        ...extra,
+      },
+      msg_id: `${active.messageId}:expert:${toolCallId}`,
+      turn_id: active.turnId,
+      conversation_id: conversationId,
+      created_at: Date.now(),
+    });
+  }
+
+  #startDelegationHeartbeat(conversationId: string, active: ActiveTurn): void {
+    const tracker = this.#delegations.get(conversationId);
+    if (!tracker || tracker.heartbeat) return;
+    tracker.heartbeat = setInterval(() => {
+      const current = this.#delegations.get(conversationId);
+      if (!current) return;
+      for (const [toolCallId, call] of current.inflight) {
+        this.#emitExpertActivity(conversationId, active, 'progress', toolCallId, call);
+      }
+    }, DELEGATION_HEARTBEAT_MS);
+    tracker.heartbeat.unref?.();
+  }
+
+  #stopDelegationHeartbeat(tracker: DelegationTracker): void {
+    if (!tracker.heartbeat) return;
+    clearInterval(tracker.heartbeat);
+    tracker.heartbeat = null;
+  }
+
+  /** Drops the tracker and wakes anything waiting on it — used by cancel and teardown. */
+  #discardDelegations(conversationId: string): void {
+    const tracker = this.#delegations.get(conversationId);
+    if (!tracker) return;
+    tracker.inflight.clear();
+    this.#stopDelegationHeartbeat(tracker);
+    this.#releaseDelegationWaiters(conversationId);
+  }
+
+  #releaseDelegationWaiters(conversationId: string): void {
+    const tracker = this.#delegations.get(conversationId);
+    if (!tracker) return;
+    const waiters = [...tracker.settled];
+    tracker.settled.clear();
+    if (tracker.inflight.size === 0) {
+      this.#stopDelegationHeartbeat(tracker);
+      this.#delegations.delete(conversationId);
+    }
+    for (const waiter of waiters) waiter();
+  }
+
+  /**
+   * Holds the turn open until delegated work settles.
+   *
+   * Returns the calls that never settled so the caller can say so rather than silently
+   * presenting a half-finished turn as complete.
+   */
+  async #awaitDelegations(conversationId: string): Promise<string[]> {
+    const tracker = this.#delegations.get(conversationId);
+    if (!tracker || tracker.inflight.size === 0) return [];
+    const timeoutMs = this.#options.delegationSettleMs ?? DEFAULT_DELEGATION_SETTLE_MS;
+    this.#traceTurn(conversationId, 'delegation_wait_begin', { inflight: tracker.inflight.size });
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(() => {
+        tracker.settled.delete(release);
+        resolve();
+      }, timeoutMs);
+      const release = (): void => {
+        clearTimeout(timer);
+        resolve();
+      };
+      tracker.settled.add(release);
+    });
+    const remaining = this.#delegations.get(conversationId);
+    const stranded = [...(remaining?.inflight.values() ?? [])].map((call) => call.toolName);
+    this.#traceTurn(conversationId, 'delegation_wait_end', { stranded: stranded.length });
+    if (remaining) this.#stopDelegationHeartbeat(remaining);
+    this.#delegations.delete(conversationId);
+    return stranded;
   }
 
   #requestPermission(request: BridgePermissionRequest): Promise<BridgePermissionDecision> {
@@ -1911,7 +2359,9 @@ export class DshApiServer {
   ): Promise<DshSession> {
     const bridge = this.#bridge;
     if (!bridge) throw new Error('DeepSeek Harness bridge is unavailable.');
-    const coldRuntime = !bridge.isWarm(workMode);
+    const capabilities = this.#conversationCapabilities(conversation);
+    const key = this.#runtimeKey(capabilities, workMode);
+    const coldRuntime = !bridge.isWarm(key);
     const active = this.#activeTurns.get(conversation.id);
     if (active) active.coldRuntime = coldRuntime;
     const initializationStartedAt = Date.now();
@@ -1920,22 +2370,23 @@ export class DshApiServer {
     const runtimeStartedAt = Date.now();
     this.#traceTurn(conversation.id, 'runtime_start_begin', {
       work_mode: workMode,
+      runtime_key: runtimeKeyId(key),
       cold_runtime: coldRuntime,
       resumed_session: Boolean(conversation.session_id),
       mcp_count: null,
       ...backgroundElapsed(),
     });
-    await bridge.warm(workMode);
+    await bridge.warm(key);
     this.#traceTurn(conversation.id, 'runtime_ready', {
       cold_runtime: coldRuntime,
       work_mode: workMode,
+      runtime_key: runtimeKeyId(key),
       resumed_session: Boolean(conversation.session_id),
       mcp_count: null,
       ...backgroundElapsed(),
       stage_duration_ms: Date.now() - runtimeStartedAt,
     });
 
-    const capabilities = this.#conversationCapabilities(conversation);
     const mcpServers = await this.#resolvedMcpServers(capabilities);
     const resumedSession = Boolean(conversation.session_id);
     if (active) {
@@ -1953,8 +2404,8 @@ export class DshApiServer {
     let session: DshSession;
     try {
       session = conversation.session_id
-        ? await bridge.resumeSession(conversation.id, conversation.session_id, workspace, workMode, mcpServers)
-        : await bridge.createSession(conversation.id, workspace, workMode, mcpServers);
+        ? await bridge.resumeSession(conversation.id, conversation.session_id, workspace, key, mcpServers)
+        : await bridge.createSession(conversation.id, workspace, key, mcpServers);
     } catch (error) {
       this.#traceTurn(conversation.id, 'session_failed', {
         work_mode: workMode,
@@ -2051,21 +2502,16 @@ export class DshApiServer {
         (name, index, values) => SKILL_NAME_PATTERN.test(name) && values.indexOf(name) === index
       );
       const skillGestures = skillIds.map((name) => `/${name}`);
-      // The expert persona is prepended (identity first) while skill gestures stay appended
-      // (action last). DSH's persona is a per-process env var, so a per-conversation expert
-      // can only be delivered in-band on the first prompt of a session.
-      const needsExpertInjection =
-        Boolean(session) &&
-        Boolean(capabilities.expertId) &&
-        conversation.extra.expert_injected_session_id !== session?.sessionId;
-      const expertPreamble = needsExpertInjection ? await this.#expertPreamble(capabilities.expertId) : '';
-      const promptText = [expertPreamble, text, skillGestures.join(' ')].filter(Boolean).join('\n\n');
+      // No expert preamble here on purpose: the expert's persona is the runtime's
+      // `system-prompt.persona`, so it survives compaction instead of being evicted as
+      // ordinary history the way an in-band first-turn injection was.
+      const promptText = [text, skillGestures.join(' ')].filter(Boolean).join('\n\n');
       this.#traceTurn(conversation.id, 'prompt_sent');
       const stopReason = await this.#bridge?.prompt(conversation.id, promptText, turnId);
       if (needsSkillInjection && session) conversation.extra.skills_injected_session_id = session.sessionId;
-      if (needsExpertInjection && expertPreamble && session) {
-        conversation.extra.expert_injected_session_id = session.sessionId;
-      }
+      // The model can stop while a delegated child is still working, so the turn ends when
+      // both have settled — not when `stopReason` arrives.
+      const strandedDelegations = await this.#awaitDelegations(conversation.id);
       const active = this.#activeTurns.get(conversation.id);
       if (active?.text) {
         (this.#state.messages[conversation.id] ??= []).push({
@@ -2087,7 +2533,12 @@ export class DshApiServer {
       await this.#persist();
       this.#emit('message.stream', {
         type: stopReason === 'failed' ? 'error' : 'finish',
-        data: stopReason === 'failed' ? { message: 'DeepSeek Harness turn failed.' } : {},
+        data:
+          stopReason === 'failed'
+            ? { message: 'DeepSeek Harness turn failed.' }
+            : strandedDelegations.length > 0
+              ? { unsettled_delegations: strandedDelegations }
+              : {},
         msg_id: messageId,
         turn_id: turnId,
         conversation_id: conversation.id,
@@ -2121,6 +2572,7 @@ export class DshApiServer {
       });
     } finally {
       this.#activeTurns.delete(conversation.id);
+      this.#discardDelegations(conversation.id);
     }
   }
 
@@ -2217,8 +2669,19 @@ export class DshApiServer {
           return;
         }
         const body = await readJsonBody(request);
+        const changesDelegation =
+          EXPERT_DELEGATION_SETTING in body &&
+          JSON.stringify(body[EXPERT_DELEGATION_SETTING]) !==
+            JSON.stringify(this.#state.clientSettings[EXPERT_DELEGATION_SETTING]);
+        // The delegation tools are mounted at process boot, so applying the switch means
+        // replacing the work-mode runtimes — which would cut a running turn in half.
+        if (changesDelegation && this.#activeTurns.size > 0) {
+          responseData(response, { error: 'A conversation is running.', code: 'CONVERSATION_BUSY' }, 409);
+          return;
+        }
         Object.assign(this.#state.clientSettings, body);
         await this.#persist();
+        if (changesDelegation) await this.#resetDelegationRuntimes();
         responseData(response, true);
         return;
       }
@@ -2778,54 +3241,17 @@ export class DshApiServer {
           exclude_auto_inject_skills: _excludeAutoInjectSkills,
           ...persistedExtra
         } = extra;
-        const requestedWorkspace =
-          typeof extra.workspace === 'string' && extra.workspace ? extra.workspace : this.#options.cwd;
-        const canonicalWorkspace = await canonicalizeWorkspace(requestedWorkspace);
-        const project = ensureWorkspaceProject(this.#state.projects, canonicalWorkspace);
-        const conversation: StoredConversation = {
-          id: typeof body.id === 'string' ? body.id : randomUUID().slice(0, 8),
-          name: typeof body.name === 'string' && body.name ? body.name : assistantName,
-          type: 'acp',
-          status: 'pending',
-          source: 'aionui',
-          pinned: false,
-          assistant: { id: assistantId, source: 'dsh', name: assistantName, avatar: '', backend: 'acp' },
-          created_at: now,
-          modified_at: now,
-          extra: {
-            ...persistedExtra,
-            workspace: canonicalWorkspace,
-            backend: 'acp',
-            current_model_id: capabilitySnapshot.model ?? this.#modelOptions()[0]?.id ?? DEFAULT_MODEL_ID,
-            work_mode: workMode,
-            capability_snapshot: capabilitySnapshot,
-          },
-          project_id: project.id,
-          runtime: idleRuntime(),
-          prompt_capability: { image: false, audio: false },
-        };
-        this.#state.conversations.push(conversation);
-        this.#state.workspaceBindings.push({
-          conversationId: conversation.id,
-          projectId: project.id,
-          workspacePeId: project.workspacePeId,
-          canonicalPath: canonicalWorkspace,
-          displayPath: requestedWorkspace,
-          revision: 1,
-        });
-        this.#state.messages[conversation.id] = [];
-        await this.#persist();
-        if (this.#options.prewarmMode !== false) {
-          void this.#ensureSession(conversation).catch((error: unknown) => {
-            console.warn(
-              `[dsh-bridge] Failed to prepare ${workMode} session for conversation ${conversation.id} (${error instanceof Error ? error.name : 'UnknownError'}).`
-            );
-          });
-        }
-        this.#emit('conversation.listChanged', {
-          conversation_id: conversation.id,
-          action: 'created',
-          source: 'aionui',
+        const conversation = await this.#createConversation({
+          ...(typeof body.id === 'string' ? { id: body.id } : {}),
+          ...(typeof body.name === 'string' && body.name ? { name: body.name } : {}),
+          workMode,
+          assistantId,
+          assistantName,
+          capabilitySnapshot,
+          extra: persistedExtra,
+          requestedWorkspace:
+            typeof extra.workspace === 'string' && extra.workspace ? extra.workspace : this.#options.cwd,
+          createdAt: now,
         });
         responseData(response, conversation, 201);
         return;
@@ -3103,7 +3529,9 @@ export class DshApiServer {
             text: '',
             startedAt: createdAt,
             workMode,
-            coldRuntime: this.#bridge ? !this.#bridge.isWarm(workMode) : true,
+            coldRuntime: this.#bridge
+              ? !this.#bridge.isWarm(this.#runtimeKey(this.#conversationCapabilities(conversation), workMode))
+              : true,
             resumedSession: Boolean(conversation.session_id),
             mcpCount: null,
             firstUpdateObserved: false,
@@ -3160,6 +3588,14 @@ export class DshApiServer {
           });
           return;
         }
+        if (tail === 'handoff' && method === 'POST') {
+          const body = await readJsonBody(request);
+          if (typeof body.expert_id !== 'string' || !body.expert_id.trim()) {
+            throw new DshApiError(400, 'EXPERT_INVALID', 'An expert id is required.');
+          }
+          responseData(response, await this.#handoffToExpert(conversation, body.expert_id.trim()), 201);
+          return;
+        }
         if (tail === 'cancel' && method === 'POST') {
           conversation.runtime = { ...conversation.runtime, state: 'cancelling' };
           for (const [key, pending] of this.#pendingPermissions) {
@@ -3168,6 +3604,8 @@ export class DshApiServer {
               this.#pendingPermissions.delete(key);
             }
           }
+          // Cancelling tears the children down with the parent, so nothing is left to wait for.
+          this.#discardDelegations(conversationId);
           await this.#bridge?.cancel(conversationId);
           responseData(response, { runtime: conversation.runtime });
           return;

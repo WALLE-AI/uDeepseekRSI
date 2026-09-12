@@ -10,9 +10,7 @@ import {
   scanExpertDirectory,
   writeExpertPackage,
 } from './repository';
-import { buildExpertSystemPrompt } from './persona';
 import { assertGoalUnique } from './validation';
-import { parseExpertManifest } from './manifest';
 import type { DshWorkMode } from '../DshRuntimePool';
 import type { ExpertDetail, ExpertScanItem, ExpertSummary, ExpertWriteRequest } from './types';
 
@@ -102,39 +100,11 @@ export class ExpertService {
     await this.#assertGoalAvailable(request, request.name);
   }
 
-  /** The text prepended to the first prompt of a session for an expert-scoped conversation. */
-  async systemPrompt(name: string): Promise<string> {
-    const detail = await this.get(name);
-    const manifest = parseExpertManifest({
-      manifestVersion: 1,
-      name: detail.name,
-      expertType: detail.expertType,
-      mode: detail.mode,
-      agentName: detail.agentName,
-      displayName: detail.displayName,
-      profession: detail.profession,
-      displayDescription: detail.displayDescription,
-      goal: detail.goal,
-      allowedTools: detail.allowedTools,
-      parallelizable: detail.parallelizable,
-      skills: [],
-      runtime: detail.runtime,
-    });
-    return buildExpertSystemPrompt(manifest, detail.persona);
-  }
-
   /** Resolves the expert for a conversation, rejecting a mode mismatch at creation time. */
   async resolveForMode(name: string, mode: DshWorkMode): Promise<ExpertDetail> {
     const expert = await this.get(name);
     if (expert.mode !== mode) {
       throw new DshApiError(409, 'EXPERT_MODE_MISMATCH', `The expert "${name}" belongs to ${expert.mode} mode.`);
-    }
-    if (expert.expertType === 'team') {
-      throw new DshApiError(
-        400,
-        'EXPERT_TYPE_UNSUPPORTED',
-        'Expert teams cannot run yet; the delegation runtime is not available.'
-      );
     }
     return expert;
   }

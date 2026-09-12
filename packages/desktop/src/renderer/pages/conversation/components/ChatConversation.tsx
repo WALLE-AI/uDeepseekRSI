@@ -26,6 +26,7 @@ import ChatLayout from './ChatLayout';
 import ChatSlider from './ChatSlider.tsx';
 import AcpModelSelector from '@/renderer/components/agent/AcpModelSelector';
 import AcpRuntimeRestartButton from '@/renderer/components/agent/AcpRuntimeRestartButton';
+import ExpertHandoffButton from '@/renderer/pages/experts/components/ExpertHandoffButton';
 import { getConversationOrNull } from '@/renderer/pages/conversation/utils/conversationCache';
 import { getConversationCreateErrorMessage } from '@/renderer/pages/conversation/utils/conversationCreateError';
 import GoogleModelSelector from '../platforms/gemini/GoogleModelSelector';
@@ -398,6 +399,14 @@ const ChatConversation: React.FC<{
     return <GoogleModelSelector disabled={true} />;
   }, [conversation, isAionrsConversation, isMobile, isLegacyReadOnlyConversation, resolvedConversationBackend]);
 
+  // Both are snapshots the backend froze into the conversation at creation time, so they
+  // describe the runtime this conversation actually runs in — not the current defaults.
+  const conversationExtra = conversation?.extra as
+    | { work_mode?: string; handoff_from_conversation_id?: string; capability_snapshot?: { expertId?: string } }
+    | undefined;
+  const conversationWorkMode = conversationExtra?.work_mode;
+  const conversationExpertId = conversationExtra?.capability_snapshot?.expertId;
+
   if (conversation && conversation.type === 'aionrs') {
     return <AionrsConversationPanel key={conversation.id} conversation={conversation} sliderTitle={sliderTitle} />;
   }
@@ -431,6 +440,24 @@ const ChatConversation: React.FC<{
           />
         </div>
       )}
+      {/* An expert is frozen into a conversation at creation, so "use an expert now" can
+          only be a handoff to a new one — see ExpertHandoffButton. */}
+      {conversation &&
+        conversation.type === 'acp' &&
+        !isMobile &&
+        !isLegacyReadOnlyConversation &&
+        conversationWorkMode && (
+          <div className='shrink-0'>
+            <ExpertHandoffButton
+              conversationId={conversation.id}
+              workMode={conversationWorkMode}
+              {...(conversationExpertId ? { currentExpertId: conversationExpertId } : {})}
+              {...(conversationExtra?.handoff_from_conversation_id
+                ? { originConversationId: conversationExtra.handoff_from_conversation_id }
+                : {})}
+            />
+          </div>
+        )}
     </div>
   );
 

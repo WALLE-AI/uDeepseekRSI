@@ -9,6 +9,15 @@ export type BridgeUpdateKind =
   | 'plan'
   | 'unknown';
 
+/** The subset of an ACP tool-call frame the bridge reasons about. */
+export type ToolCallEnvelope = {
+  toolCallId: string;
+  /** Only present on `tool_call`; `tool_call_update` identifies the call by id alone. */
+  toolName?: string;
+  /** `pending` | `in_progress` | `completed` | `failed` as reported by dsh. */
+  status?: string;
+};
+
 export type BridgeUpdate = {
   conversationId: string;
   sessionId: string;

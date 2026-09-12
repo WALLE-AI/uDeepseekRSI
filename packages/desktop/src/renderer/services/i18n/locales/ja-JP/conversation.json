@@ -79,6 +79,7 @@
     "deleting": "削除中...",
     "reorderPinned": "ドラッグしてピン留め会話の順序を変更",
     "forkedFrom": "「{{name}}」から分岐",
+    "handedOffFrom": "「{{name}}」から引き継ぎ",
     "forkedConversation": "分岐した会話",
     "archive": "アーカイブ",
     "archiveSuccess": "アーカイブしました",

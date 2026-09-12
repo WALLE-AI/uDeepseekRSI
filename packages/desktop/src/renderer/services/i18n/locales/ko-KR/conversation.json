@@ -79,6 +79,7 @@
     "deleting": "삭제 중...",
     "reorderPinned": "드래그하여 고정된 대화 순서 변경",
     "forkedFrom": "“{{name}}”에서 분기됨",
+    "handedOffFrom": "“{{name}}”에서 인계됨",
     "forkedConversation": "분기된 대화",
     "archive": "보관",
     "archiveSuccess": "보관됨",

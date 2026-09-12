@@ -79,6 +79,7 @@
     "deleting": "در حال حذف...",
     "reorderPinned": "برای تغییر ترتیب گفتگوی سنجاق‌شده بکشید",
     "forkedFrom": "انشعاب از «{{name}}»",
+    "handedOffFrom": "واگذارشده از «{{name}}»",
     "forkedConversation": "گفتگوی منشعب",
     "archive": "بایگانی",
     "archiveSuccess": "بایگانی شد",

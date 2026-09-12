@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve as resolvePath } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import WebSocket from 'ws';
-import { DshApiServer } from '../../../packages/dsh-bridge/src';
+import { DshApiServer, runtimeKeyId } from '../../../packages/dsh-bridge/src';
 import type {
   BridgePermissionDecision,
   BridgePermissionRequest,
@@ -35,6 +35,7 @@ async function createServer(
   options?: {
     authToken?: string;
     prewarmMode?: 'office' | 'coding' | 'research' | false;
+    delegationSettleMs?: number;
     portOverrides?: Partial<DshAgentPort>;
   }
 ) {
@@ -45,6 +46,7 @@ async function createServer(
   const setConfigCalls: Array<{ sessionId: string; configId: string; value: string }> = [];
   const sessionMcpServers: unknown[][] = [];
   const prompts: string[] = [];
+  const runtimeKeys: string[] = [];
   const port: DshAgentPort = {
     initialize: async () => ({ protocolVersion: 1, capabilities: {} }),
     newSession: async (cwd, mcpServers) => {
@@ -90,15 +92,17 @@ async function createServer(
     cwd: root,
     dshHome: join(root, 'dsh'),
     dataFile: join(root, 'state.json'),
-    agentPortFactory: (handlers) => {
+    agentPortFactory: (handlers, _mode, key) => {
       emitUpdate = handlers.onUpdate;
       requestPermission = handlers.onPermissionRequest;
+      runtimeKeys.push(runtimeKeyId(key));
       return port;
     },
     env,
     officePreviewPort,
     authToken: options?.authToken,
     prewarmMode: options?.prewarmMode ?? false,
+    ...(options?.delegationSettleMs === undefined ? {} : { delegationSettleMs: options.delegationSettleMs }),
   });
   const serverPort = await server.start();
   cleanups.push(async () => {
@@ -113,18 +117,24 @@ async function createServer(
     sessionMcpServers,
     prompts,
     port,
+    runtimeKeys,
+    /** Pushes a session update as if dsh had sent it, for tests that drive the stream. */
+    emit: (update: BridgeUpdate) => emitUpdate?.(update),
   };
 }
 
 describe('direct DeepSeek Harness HTTP backend', () => {
-  it('prewarms the configured runtime when the API server starts', async () => {
+  it('prewarms the no-expert runtime when the API server starts', async () => {
     const initialize = vi.fn(async () => ({ protocolVersion: 1, capabilities: {} }));
-    await createServer(undefined, undefined, {
+    const { runtimeKeys } = await createServer(undefined, undefined, {
       prewarmMode: 'coding',
       portOverrides: { initialize },
     });
 
     await vi.waitFor(() => expect(initialize).toHaveBeenCalledTimes(1));
+    // Prewarming an expert key would warm a runtime almost nobody enters; the shared
+    // work-mode key is what every conversation started from the home page uses.
+    expect(runtimeKeys).toEqual(['coding::']);
   });
 
   it('prepares a conversation session in the background and reuses it for ensure', async () => {
@@ -308,6 +318,129 @@ describe('direct DeepSeek Harness HTTP backend', () => {
     expect(event).toMatchObject({ type: 'start', data: { phase: 'runtime_initializing' } });
     sessionReady.resolve({ sessionId: 'session-1', configOptions: [] });
     socket.close();
+  });
+
+  /**
+   * Drives one turn whose prompt opens a tool call and returns immediately, then reports
+   * the `message.stream` frames the turn produced.
+   *
+   * `dsh-base` mounts `subagent` as `backgroundMode: continuable`, so this is the shape of
+   * a real turn that stops while a delegated child is still working.
+   */
+  async function runTurnWithOpenToolCall(
+    toolName: string,
+    options?: { delegationSettleMs?: number; rawInput?: Record<string, unknown> }
+  ) {
+    let emit: ((update: BridgeUpdate) => void) | undefined;
+    let conversationId = '';
+    const server = await createServer(undefined, undefined, {
+      ...(options?.delegationSettleMs === undefined ? {} : { delegationSettleMs: options.delegationSettleMs }),
+      portOverrides: {
+        prompt: async () => {
+          emit?.({
+            conversationId,
+            sessionId: 'session-1',
+            sequence: 1,
+            kind: 'tool-start',
+            payload: {
+              toolCallId: 'call-9',
+              title: toolName,
+              status: 'in_progress',
+              ...(options?.rawInput ? { rawInput: options.rawInput } : {}),
+            },
+          });
+          return { stopReason: 'end_turn' };
+        },
+      },
+    });
+    const { baseUrl, serverPort } = server;
+    emit = server.emit;
+    const created = (await (
+      await fetch(`${baseUrl}/api/conversations`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ extra: {} }),
+      })
+    ).json()) as { data: { id: string } };
+    conversationId = created.data.id;
+
+    const socket = new WebSocket(`ws://127.0.0.1:${serverPort}/ws`);
+    await new Promise<void>((resolve, reject) => {
+      socket.once('open', () => resolve());
+      socket.once('error', reject);
+    });
+    const frames: Array<{ type: string; data: Record<string, unknown> }> = [];
+    socket.on('message', (raw) => {
+      const frame = JSON.parse(raw.toString()) as {
+        name: string;
+        data: { type: string; data: Record<string, unknown> };
+      };
+      if (frame.name === 'message.stream') frames.push(frame.data);
+    });
+    cleanups.push(async () => socket.close());
+
+    await fetch(`${baseUrl}/api/conversations/${conversationId}/messages`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: 'delegate this' }),
+    });
+    return {
+      frames,
+      finish: () => frames.find((frame) => frame.type === 'finish'),
+      settle: () =>
+        emit?.({
+          conversationId,
+          sessionId: 'session-1',
+          sequence: 2,
+          kind: 'tool-update',
+          payload: { toolCallId: 'call-9', status: 'completed' },
+        }),
+    };
+  }
+
+  it('holds the turn open until a delegated subagent settles', async () => {
+    const turn = await runTurnWithOpenToolCall('subagent');
+
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(turn.finish()).toBeUndefined();
+
+    turn.settle();
+    await vi.waitFor(() => expect(turn.finish()).toBeDefined());
+    expect(turn.finish()?.data).toEqual({});
+  });
+
+  it('does not hold the turn open for an ordinary tool call', async () => {
+    const turn = await runTurnWithOpenToolCall('read');
+
+    await vi.waitFor(() => expect(turn.finish()).toBeDefined());
+  });
+
+  it('reports a delegated member as expert activity rather than a raw tool card', async () => {
+    const turn = await runTurnWithOpenToolCall('expert__rd_architect', {
+      rawInput: { prompt: 'Pick the module boundaries' },
+    });
+
+    await vi.waitFor(() => expect(turn.frames.some((frame) => frame.type === 'expert_activity')).toBe(true));
+    expect(turn.frames.find((frame) => frame.type === 'expert_activity')?.data).toMatchObject({
+      phase: 'started',
+      tool_name: 'expert__rd_architect',
+      member_id: 'rd-architect',
+      task: 'Pick the module boundaries',
+    });
+    // One representation of the work: the generic tool card is suppressed for delegations.
+    expect(turn.frames.some((frame) => frame.type === 'acp_tool_call')).toBe(false);
+
+    turn.settle();
+    await vi.waitFor(() =>
+      expect(turn.frames.some((frame) => frame.type === 'expert_activity' && frame.data.phase === 'done')).toBe(true)
+    );
+  });
+
+  it('finishes an unsettled delegation with an explicit note after the settle timeout', async () => {
+    const turn = await runTurnWithOpenToolCall('subagent', { delegationSettleMs: 120 });
+
+    await vi.waitFor(() => expect(turn.finish()).toBeDefined());
+    expect(turn.finish()?.data).toEqual({ unsettled_delegations: ['subagent'] });
   });
 
   it('rejects runtime restart while a conversation turn is active', async () => {

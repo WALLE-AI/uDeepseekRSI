@@ -7,11 +7,28 @@ export {
   DSH_WORK_MODES,
   DshRuntimePool,
   LEGACY_DSH_ASSISTANT_ID,
+  modeRuntimeKey,
   normalizeDshWorkMode,
   personaForDshWorkMode,
+  runtimeKeyId,
   workModeFromAssistantId,
 } from './DshRuntimePool';
-export type { DshWorkMode } from './DshRuntimePool';
+export type { DshRuntimeKey, DshWorkMode } from './DshRuntimePool';
+export {
+  EXPERT_DELEGATION_TOOL_PREFIX,
+  EXPERT_PATCH_FILE,
+  allowedDshTools,
+  delegationToolName,
+  disabledToolRows,
+  expertPatchYaml,
+  expertRuntimeHome,
+  expertRuntimeProfile,
+  expertSandboxMode,
+  isDelegationToolName,
+  memberIdFromDelegationTool,
+  shellToolId,
+} from './experts/runtime';
+export type { ExpertRuntimeProfile } from './experts/runtime';
 export { createDshConnection } from './createDshConnection';
 export { DshApiServer } from './DshApiServer';
 export type { DshApiServerOptions, ProviderCredentialStore } from './DshApiServer';
@@ -23,7 +40,7 @@ export type {
   OfficePreviewStatus,
 } from './officePreviewService';
 export type { DesktopShellPort, DshMcpServer } from './types';
-export { mapStopReason, mapUpdateKind } from './updateMapper';
+export { mapStopReason, mapUpdateKind, parseToolCallEnvelope } from './updateMapper';
 export type {
   BridgePermissionDecision,
   BridgePermissionRequest,
@@ -34,4 +51,5 @@ export type {
   DshBridgeOptions,
   DshSession,
   DshSessionConfigOption,
+  ToolCallEnvelope,
 } from './types';

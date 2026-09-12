@@ -1,6 +1,13 @@
 export { ExpertService, type ExpertServiceOptions } from './ExpertService';
 export { detailDto, scanItemDto, summaryDto, writeRequestFromBody } from './dto';
 export {
+  EXPERT_CONSTRAINTS,
+  buildExpertMemberSystemPrompt,
+  buildExpertSystemPrompt,
+  buildTeamLeadSystemPrompt,
+  expertRevision,
+} from './persona';
+export {
   EXPERT_MAX_FILE_BYTES,
   EXPERT_MAX_MEMBERS,
   EXPERT_MAX_OWN_SKILLS,

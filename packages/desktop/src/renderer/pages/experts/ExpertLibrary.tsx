@@ -10,6 +10,7 @@ import { Button, Spin } from '@arco-design/web-react';
 import classNames from 'classnames';
 import { AionSearchInput } from '@/renderer/components/base';
 import ExpertCard from './components/ExpertCard';
+import ExpertDelegationSwitch from './components/ExpertDelegationSwitch';
 import ExpertSceneRow from './components/ExpertSceneRow';
 import ExpertTopNav from './components/ExpertTopNav';
 import { DSH_ASSISTANT_WORK_MODES } from '@/common/types/agent/assistantTypes';
@@ -213,6 +214,14 @@ const ExpertLibrary: React.FC<ExpertLibraryProps> = ({
               </button>
             ))}
           </div>
+
+          {/* Shown only once a single mode is in view: delegation is configured per mode,
+              and this is where the user is already thinking about that mode's experts. */}
+          {tab === 'agent' && mode !== 'all' ? (
+            <div className='mb-16px rounded-10px bg-fill-1 px-12px py-10px'>
+              <ExpertDelegationSwitch mode={mode} />
+            </div>
+          ) : null}
 
           {loading ? (
             <div className='flex justify-center py-48px'>

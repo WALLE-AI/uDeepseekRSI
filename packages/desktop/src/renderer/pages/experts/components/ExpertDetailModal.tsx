@@ -6,7 +6,7 @@
 
 import React from 'react';
 import { useTranslation } from 'react-i18next';
-import { Button, Modal, Tooltip } from '@arco-design/web-react';
+import { Button, Modal } from '@arco-design/web-react';
 import { CommentOne, Send } from '@icon-park/react';
 import ExpertAvatar from './ExpertAvatar';
 import {
@@ -54,7 +54,6 @@ const ExpertDetailModal: React.FC<ExpertDetailModalProps> = ({ expert, localeKey
     <Button
       data-testid='expert-detail-summon'
       type='primary'
-      disabled={isTeam}
       icon={<Send theme='outline' size='14' fill='currentColor' />}
       onClick={() => onSummon(expert, defaultPrompt)}
     >
@@ -86,13 +85,19 @@ const ExpertDetailModal: React.FC<ExpertDetailModalProps> = ({ expert, localeKey
               ) : null}
             </div>
             <div className='mt-12px'>
+              {summonButton}
+              {/* Stated inline rather than in a tooltip: a team's members run with the
+                  lead's sandbox and never raise their own confirmation dialog (DSH pins
+                  delegated children to "never ask"), so summoning one is a permission
+                  decision and must not be hidden behind a hover. */}
               {isTeam ? (
-                <Tooltip content={t('experts.teamBlocked')}>
-                  <span>{summonButton}</span>
-                </Tooltip>
-              ) : (
-                summonButton
-              )}
+                <p
+                  data-testid='expert-detail-team-notice'
+                  className='m-0 mt-8px text-12px leading-[1.6] text-t-tertiary'
+                >
+                  {t('experts.teamApprovalNotice')}
+                </p>
+              ) : null}
             </div>
           </div>
         </div>
@@ -130,7 +135,6 @@ const ExpertDetailModal: React.FC<ExpertDetailModalProps> = ({ expert, localeKey
                   key={prompt}
                   type='button'
                   data-testid='expert-detail-prompt'
-                  disabled={isTeam}
                   // A whole-row target: the reference flow is "click the ask, land in the
                   // composer with it already typed", so the text itself is the control.
                   className='flex w-full cursor-pointer items-center gap-10px rounded-10px border-none bg-fill-1 px-12px py-10px text-start text-13px leading-[1.5] text-t-primary transition-colors hover:bg-fill-2 disabled:cursor-not-allowed disabled:opacity-60'

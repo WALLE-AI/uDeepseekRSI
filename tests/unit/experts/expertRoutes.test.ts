@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { DshApiServer } from '../../../packages/dsh-bridge/src';
+import { DshApiServer, EXPERT_PATCH_FILE, runtimeKeyId } from '../../../packages/dsh-bridge/src';
 import type { DshAgentPort } from '../../../packages/dsh-bridge/src';
 
 const cleanups: Array<() => Promise<void>> = [];
@@ -15,6 +15,7 @@ async function createServer() {
   const root = await mkdtemp(join(tmpdir(), 'dsh-experts-'));
   const sessions = new Map<string, string>();
   const prompts: string[] = [];
+  const runtimeKeys: string[] = [];
   const port: DshAgentPort = {
     initialize: async () => ({ protocolVersion: 1, capabilities: {} }),
     newSession: async (cwd) => {
@@ -37,7 +38,10 @@ async function createServer() {
     dshHome: join(root, 'dsh'),
     expertsDir: join(root, 'experts'),
     dataFile: join(root, 'state.json'),
-    agentPortFactory: () => port,
+    agentPortFactory: (_handlers, _mode, key) => {
+      runtimeKeys.push(runtimeKeyId(key));
+      return port;
+    },
     prewarmMode: false,
   });
   const serverPort = await server.start();
@@ -54,7 +58,7 @@ async function createServer() {
     });
     return { status: response.status, payload: (await response.json()) as { data?: never; code?: string } };
   };
-  return { root, baseUrl, call, prompts, expertsDir: join(root, 'experts') };
+  return { root, baseUrl, call, prompts, runtimeKeys, dshHome: join(root, 'dsh'), expertsDir: join(root, 'experts') };
 }
 
 const SKILL_DOC = ['---', 'name: dep-graph', 'description: Maps module dependencies', '---', '', 'Use it.'].join('\n');
@@ -286,9 +290,10 @@ describe('expert package HTTP routes', () => {
     expect((await call('GET', '/api/experts')).payload.data as unknown as unknown[]).toEqual([]);
   });
 
-  it('injects the expert persona once per session and keeps the stored message clean', async () => {
-    const { call, prompts } = await createServer();
-    await call('POST', '/api/experts', agentRequest());
+  it('gives an expert conversation its own runtime and stops injecting the persona in-band', async () => {
+    const { call, prompts, runtimeKeys } = await createServer();
+    const expert = await call('POST', '/api/experts', agentRequest());
+    const revision = (expert.payload.data as unknown as { revision: string }).revision;
 
     const created = await call('POST', '/api/conversations', {
       assistant: { id: 'dsh:coding', conversation_overrides: { expert_id: 'repo-surveyor' } },
@@ -298,8 +303,7 @@ describe('expert package HTTP routes', () => {
     const conversationId = (created.payload.data as unknown as { id: string }).id;
 
     for (const [index, content] of ['first', 'second'].entries()) {
-      // The turn completes after the POST returns, and the second turn must observe the
-      // injection state the first one wrote — so wait for the prompt to actually land
+      // The turn completes after the POST returns, so wait for the prompt to actually land
       // rather than sleeping a fixed amount, which is flaky under a loaded test run.
       // eslint-disable-next-line no-await-in-loop
       await call('POST', `/api/conversations/${conversationId}/messages`, { content });
@@ -307,11 +311,40 @@ describe('expert package HTTP routes', () => {
       await vi.waitFor(() => expect(prompts.length).toBe(index + 1));
     }
 
-    expect(prompts[0]).toContain('仓库勘察');
-    expect(prompts[0]).toContain('定位代码路径、依赖与既有约定');
-    expect(prompts[0]).toContain('first');
-    // Second turn of the same session must not repeat the persona.
-    expect(prompts[1]).toBe('second');
+    // The persona is the runtime's system prompt now, so no turn carries it as history.
+    expect(prompts).toEqual(['first', 'second']);
+    expect(runtimeKeys).toEqual([`coding:repo-surveyor:${revision}`]);
+  });
+
+  it('writes a read-only sandbox overlay for an expert with no write tools', async () => {
+    const { call, dshHome } = await createServer();
+    await call('POST', '/api/experts', agentRequest());
+    const created = await call('POST', '/api/conversations', {
+      assistant: { id: 'dsh:coding', conversation_overrides: { expert_id: 'repo-surveyor' } },
+      extra: {},
+    });
+    const conversationId = (created.payload.data as unknown as { id: string }).id;
+    await call('POST', `/api/conversations/${conversationId}/runtime/ensure`);
+
+    const patch = await readFile(
+      join(dshHome, 'expert-runtimes', 'coding', 'repo-surveyor', EXPERT_PATCH_FILE),
+      'utf8'
+    );
+    expect(patch).toContain('- id: sandbox-policy');
+    expect(patch).toContain('mode: read-only');
+    // Shell and delegation are not in the tool allowlist, so their rows are switched off.
+    expect(patch).toContain('- id: tool-subagent\n  disabled: true');
+    // Approval must never be restated: that is the only way to stop asking about the lead.
+    expect(patch).not.toContain('id: approval');
+  });
+
+  it('keeps a conversation without an expert on the shared work-mode runtime', async () => {
+    const { call, runtimeKeys } = await createServer();
+    const created = await call('POST', '/api/conversations', { assistant: { id: 'dsh:coding' }, extra: {} });
+    const conversationId = (created.payload.data as unknown as { id: string }).id;
+    await call('POST', `/api/conversations/${conversationId}/runtime/ensure`);
+
+    expect(runtimeKeys).toEqual(['coding::']);
   });
 
   it('rejects an expert that belongs to another work mode', async () => {
@@ -325,14 +358,24 @@ describe('expert package HTTP routes', () => {
     expect(created.payload.code).toBe('EXPERT_MODE_MISMATCH');
   });
 
-  it('refuses to run a team expert until the delegation runtime exists', async () => {
-    const { call } = await createServer();
+  it('mounts one delegation tool per team member when a team conversation starts', async () => {
+    const { call, dshHome } = await createServer();
     await call('POST', '/api/experts', teamRequest());
     const created = await call('POST', '/api/conversations', {
       assistant: { id: 'dsh:coding', conversation_overrides: { expert_id: 'rd-team' } },
       extra: {},
     });
-    expect(created.status).toBe(400);
-    expect(created.payload.code).toBe('EXPERT_TYPE_UNSUPPORTED');
+    expect(created.status).toBe(201);
+    const conversationId = (created.payload.data as unknown as { id: string }).id;
+    await call('POST', `/api/conversations/${conversationId}/runtime/ensure`);
+
+    const patch = await readFile(join(dshHome, 'expert-runtimes', 'coding', 'rd-team', EXPERT_PATCH_FILE), 'utf8');
+    expect(patch).toContain('- id: expert-member-rd-architect');
+    expect(patch).toContain('toolName: expert__rd_architect');
+    expect(patch).toContain('maxDepth: 1');
+    // A read-only member gets an allowlist with no write tool in it.
+    expect(patch).toContain('allow: [grep, read, read_image, skill, todo_write]');
+    // The lead itself is not a delegation target.
+    expect(patch).not.toContain('expert-member-rd-lead');
   });
 });

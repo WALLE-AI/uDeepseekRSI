@@ -83,6 +83,7 @@
     "deleting": "Видалення...",
     "reorderPinned": "Перетягніть, щоб змінити порядок закріплених розмов",
     "forkedFrom": "Відгалуження від «{{name}}»",
+    "handedOffFrom": "Передано з «{{name}}»",
     "forkedConversation": "Відгалужена розмова",
     "archive": "Архівувати",
     "archiveSuccess": "Заархівовано",

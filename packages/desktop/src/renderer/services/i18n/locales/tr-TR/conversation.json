@@ -79,6 +79,7 @@
     "deleting": "Siliniyor...",
     "reorderPinned": "Sabitlenmiş sohbetin sırasını değiştirmek için sürükleyin",
     "forkedFrom": "“{{name}}” konuşmasından çatallandı",
+    "handedOffFrom": "“{{name}}” konuşmasından devredildi",
     "forkedConversation": "Çatallanmış konuşma",
     "archive": "Arşivle",
     "archiveSuccess": "Arşivlendi",

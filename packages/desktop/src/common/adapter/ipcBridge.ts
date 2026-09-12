@@ -215,6 +215,28 @@ export const experts = {
   reveal: httpPost<void, { name: string }>((p) => `/api/experts/${encodeURIComponent(p.name)}/reveal`),
   paths: httpGet<{ user_experts_dir: string }, void>('/api/experts/paths'),
   toolVocabulary: httpGet<string[], void>('/api/experts/tool-vocabulary'),
+  /**
+   * Continues a conversation's work under an expert.
+   *
+   * It returns a *new* conversation rather than rebinding this one: an expert is a runtime
+   * key, so a conversation is tied to one dsh process and one session inside it, and
+   * swapping that in place would orphan the stored session.
+   */
+  handoff: httpPost<{ id: string }, { conversation_id: string; expert_id: string }>(
+    (p) => `/api/conversations/${encodeURIComponent(p.conversation_id)}/handoff`,
+    (p) => ({ expert_id: p.expert_id })
+  ),
+  /**
+   * Per-work-mode switch for "the mode lead may call in experts".
+   *
+   * Off for every mode by default. The delegation tools are mounted when the dsh process
+   * boots, so writing this replaces that mode's runtime — the backend refuses the write
+   * while a turn is running rather than cutting it in half.
+   */
+  getDelegation: httpGetClientSetting<Record<string, boolean>>('expert_delegation'),
+  setDelegation: httpPut<void, { delegation: Record<string, boolean> }>('/api/settings/client', (p) => ({
+    expert_delegation: p.delegation,
+  })),
 };
 
 // ---------------------------------------------------------------------------
@@ -1892,6 +1914,9 @@ export interface ICreateConversationParams {
       skill_ids?: string[];
       disabled_builtin_skill_ids?: string[];
       mcp_ids?: string[];
+      /** Frozen into the conversation at creation; it decides the runtime the turn runs in. */
+      expert_id?: string;
+      thought_level?: string;
     };
   };
   extra: {
