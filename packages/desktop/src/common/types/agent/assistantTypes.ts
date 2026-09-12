@@ -18,11 +18,21 @@ export const LEGACY_DSH_ASSISTANT_ID = 'dsh:deepseek-harness';
 
 export type DshAssistantWorkMode = 'office' | 'coding' | 'research';
 
+/** Work modes in the order they are presented, matching the backend's `DSH_WORK_MODES`. */
+export const DSH_ASSISTANT_WORK_MODES: readonly DshAssistantWorkMode[] = ['office', 'coding', 'research'];
+
 export function dshAssistantWorkMode(assistantId: string): DshAssistantWorkMode | undefined {
   if (assistantId === DSH_OFFICE_ASSISTANT_ID) return 'office';
   if (assistantId === DSH_CODING_ASSISTANT_ID || assistantId === LEGACY_DSH_ASSISTANT_ID) return 'coding';
   if (assistantId === DSH_RESEARCH_ASSISTANT_ID) return 'research';
   return undefined;
+}
+
+/** Inverse of `dshAssistantWorkMode`; mirrors `assistantIdForWorkMode` in DshRuntimePool.ts. */
+export function assistantIdForWorkMode(mode: DshAssistantWorkMode): string {
+  if (mode === 'office') return DSH_OFFICE_ASSISTANT_ID;
+  if (mode === 'research') return DSH_RESEARCH_ASSISTANT_ID;
+  return DSH_CODING_ASSISTANT_ID;
 }
 
 export type AssistantAgent = {

@@ -34,6 +34,8 @@ export type GuidSendDeps = {
   selectedMode: string;
   selectedAcpModel: string | null;
   selectedThoughtLevelValue?: string;
+  /** Expert chosen in the library; becomes an immutable part of the conversation snapshot. */
+  selectedExpertId?: string;
   current_model: TProviderWithModel | undefined;
 
   guidDisabledBuiltinSkills: string[] | undefined;
@@ -81,6 +83,7 @@ export const useGuidSend = (deps: GuidSendDeps): GuidSendResult => {
     selectedMode,
     selectedAcpModel,
     selectedThoughtLevelValue,
+    selectedExpertId,
     current_model,
     guidDisabledBuiltinSkills,
     guidEnabledSkills,
@@ -168,6 +171,7 @@ export const useGuidSend = (deps: GuidSendDeps): GuidSendResult => {
       skill_ids: enabled_skills_to_send,
       disabled_builtin_skill_ids: excludeBuiltinSkills,
       mcp_ids: assistantOverrideMcpIds,
+      expert_id: selectedExpertId || undefined,
     };
 
     if (assistantBackend === 'aionrs') {
@@ -290,6 +294,7 @@ export const useGuidSend = (deps: GuidSendDeps): GuidSendResult => {
     selectedMode,
     selectedAcpModel,
     selectedThoughtLevelValue,
+    selectedExpertId,
     current_model,
     guidDisabledBuiltinSkills,
     guidEnabledSkills,

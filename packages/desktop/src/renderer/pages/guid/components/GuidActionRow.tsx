@@ -114,6 +114,8 @@ type GuidActionRowProps = {
   loading: boolean;
   isButtonDisabled: boolean;
   speechInputNode?: React.ReactNode;
+  /** The summoned expert, rendered next to the "+" entry. */
+  expertChip?: React.ReactNode;
   onSend: () => void;
 };
 
@@ -145,6 +147,7 @@ const GuidActionRow: React.FC<GuidActionRowProps> = ({
   loading,
   isButtonDisabled,
   speechInputNode,
+  expertChip,
   onSend,
 }) => {
   const { t } = useTranslation();
@@ -620,6 +623,9 @@ const GuidActionRow: React.FC<GuidActionRowProps> = ({
             />
           )}
         </div>
+        {/* Sits beside the "+" so the summoned expert reads as part of the composer,
+            not as another toolbar control. */}
+        {expertChip}
       </div>
       {isMobile && (
         <MobileActionSheet

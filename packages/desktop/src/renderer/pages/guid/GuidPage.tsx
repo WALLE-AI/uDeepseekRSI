@@ -18,6 +18,9 @@ import { openExternalUrl } from '@/renderer/utils/platform';
 import SlashCommandMenu, { type SlashCommandMenuItem } from '@/renderer/components/chat/SlashCommandMenu';
 import AssistantSelectionArea from './components/AssistantSelectionArea';
 import GuidActionRow from './components/GuidActionRow';
+import SummonedExpertChip from './components/SummonedExpertChip';
+import { stripConsumedAssistantState, summonedExpertFromState } from './utils/navigationState';
+import type { GuidNavigationState } from './types';
 import GuidInputCard from './components/GuidInputCard';
 import GuidModelSelector from './components/GuidModelSelector';
 import QuickActionButtons from './components/QuickActionButtons';
@@ -41,17 +44,6 @@ import { useTranslation } from 'react-i18next';
 import { useLocation, useNavigate } from 'react-router-dom';
 import useSWR from 'swr';
 import styles from './index.module.css';
-
-type GuidNavigationState = {
-  resetAssistant?: boolean;
-  selectedAssistantId?: string;
-  prefillPrompt?: string;
-  prefillFiles?: string[];
-  preservePrefillDraft?: boolean;
-  focusPrefill?: boolean;
-  workspace?: string;
-  [key: string]: unknown;
-};
 
 const GuidPage: React.FC = () => {
   const { t, i18n } = useTranslation();
@@ -137,6 +129,15 @@ const GuidPage: React.FC = () => {
   const navState = location.state as GuidNavigationState | null;
   const resetAssistantRequested = navState?.resetAssistant === true;
   const preselectAssistantId = navState?.selectedAssistantId;
+  // Mirrored into state so the chip can be dismissed without rewriting history, and so a
+  // later navigation to /guid (a fresh "new chat") drops the previous expert.
+  const [summonedExpert, setSummonedExpert] = useState<{ id: string; label: string } | null>(null);
+  const summonedFromKeyRef = useRef<string | undefined>(undefined);
+  if (summonedFromKeyRef.current !== location.key) {
+    summonedFromKeyRef.current = location.key;
+    const nextExpert = summonedExpertFromState(navState);
+    if (nextExpert?.id !== summonedExpert?.id) setSummonedExpert(nextExpert);
+  }
   const agentSelection = useGuidAssistantSelection({
     resetAssistant: resetAssistantRequested,
     preselectAssistantId,
@@ -262,6 +263,7 @@ const GuidPage: React.FC = () => {
     selectedMode: agentSelection.selectedMode,
     selectedAcpModel: agentSelection.selectedAcpModel,
     selectedThoughtLevelValue: agentSelection.selectedThoughtLevelValue,
+    selectedExpertId: summonedExpert?.id,
     current_model: modelSelection.current_model,
 
     guidDisabledBuiltinSkills,
@@ -579,8 +581,22 @@ const GuidPage: React.FC = () => {
   // the dev server (which has no SPA fallback) and 404.
   useEffect(() => {
     if (!resetAssistantRequested && !preselectAssistantId) return;
-    navigate(`${location.pathname}${location.search}${location.hash}`, { replace: true, state: null });
-  }, [resetAssistantRequested, preselectAssistantId, location.pathname, location.search, location.hash, navigate]);
+    // Strip only the two keys this effect owns. Blanking the whole state also dropped
+    // `expertId`, which is what an expert summon travels on — and since a summon always
+    // sets `selectedAssistantId`, it always triggered this cleanup and lost its expert.
+    navigate(`${location.pathname}${location.search}${location.hash}`, {
+      replace: true,
+      state: stripConsumedAssistantState(location.state as GuidNavigationState | null),
+    });
+  }, [
+    resetAssistantRequested,
+    preselectAssistantId,
+    location.pathname,
+    location.search,
+    location.hash,
+    location.state,
+    navigate,
+  ]);
 
   // Agents that use configured model providers instead of ACP probe-based models.
   // Only aionrs now — Gemini runs as a regular ACP backend with ACP-cached models.
@@ -640,6 +656,11 @@ const GuidPage: React.FC = () => {
       onToggleMcpServer={handleToggleMcpServer}
       speechInputNode={
         <SpeechInputButton onLiveTranscript={handleLiveTranscript} onTranscript={handleSpeechTranscript} />
+      }
+      expertChip={
+        summonedExpert ? (
+          <SummonedExpertChip label={summonedExpert.label} onRemove={() => setSummonedExpert(null)} />
+        ) : null
       }
       loading={guidInput.loading}
       isButtonDisabled={send.isButtonDisabled}

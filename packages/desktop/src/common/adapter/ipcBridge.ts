@@ -36,6 +36,13 @@ import type {
   UpdateAssistantRequest,
 } from '../types/agent/assistantTypes';
 import type {
+  ExpertDetail,
+  ExpertImportResult,
+  ExpertScanItem,
+  ExpertSummary,
+  ExpertWriteRequest,
+} from '../types/agent/expertTypes';
+import type {
   EnsureConversationRuntimeResponse,
   GetConfigOptionsResponse,
   SetConfigOptionRequest,
@@ -184,6 +191,30 @@ export const assistants = {
     }
   ),
   import: httpPost<ImportAssistantsResult, ImportAssistantsRequest>('/api/assistants/import'),
+};
+
+// ---------------------------------------------------------------------------
+// Expert packages — the per-mode expert library. Definitions live on disk under the
+// backend's experts root, so every call here is catalog IO, not conversation state.
+// ---------------------------------------------------------------------------
+
+export const experts = {
+  // The endpoint also accepts `?mode=`/`?type=`, but the library filters client-side so a
+  // single cached list serves every tab.
+  list: httpGet<ExpertSummary[], void>('/api/experts'),
+  get: httpGet<ExpertDetail, { name: string }>((p) => `/api/experts/${encodeURIComponent(p.name)}`),
+  create: httpPost<ExpertDetail, ExpertWriteRequest>('/api/experts'),
+  update: httpPut<ExpertDetail, ExpertWriteRequest & { name: string }>(
+    (p) => `/api/experts/${encodeURIComponent(p.name)}`
+  ),
+  remove: httpDelete<void, { name: string }>((p) => `/api/experts/${encodeURIComponent(p.name)}`),
+  validate: httpPost<{ ok: boolean }, ExpertWriteRequest>('/api/experts/validate'),
+  scan: httpPost<ExpertScanItem[], { folder_path: string }>('/api/experts/scan'),
+  import: httpPost<ExpertImportResult, { expert_path: string; overwrite?: boolean }>('/api/experts/import'),
+  export: httpPost<{ path: string }, { name: string; target_dir: string }>('/api/experts/export'),
+  reveal: httpPost<void, { name: string }>((p) => `/api/experts/${encodeURIComponent(p.name)}/reveal`),
+  paths: httpGet<{ user_experts_dir: string }, void>('/api/experts/paths'),
+  toolVocabulary: httpGet<string[], void>('/api/experts/tool-vocabulary'),
 };
 
 // ---------------------------------------------------------------------------

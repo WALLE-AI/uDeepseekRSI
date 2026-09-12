@@ -3,7 +3,7 @@ import { randomBytes } from 'node:crypto';
 import { join, resolve } from 'node:path';
 import { DshApiServer } from '@udeepseekrsi/dsh-bridge';
 import { BUILTIN_BROWSER_MCP_NAME } from '@/common/config/constants';
-import { getBuiltinMcpScriptPath, getSkillsDir } from '../utils/initStorage';
+import { getBuiltinMcpScriptPath, getExpertsDir, getSkillsDir } from '../utils/initStorage';
 import { createDesktopShell } from './desktopShell';
 import { SafeStorageProviderCredentialStore } from './providerCredentialStore';
 
@@ -76,6 +76,7 @@ export class DirectBackendManager {
       cwd: process.cwd(),
       dshHome: process.env.DSH_HOME?.trim() || join(dataDir, 'dsh'),
       skillsDir: getSkillsDir(),
+      expertsDir: getExpertsDir(),
       dataFile: join(dataDir, 'dsh-bridge-state.json'),
       patchPaths,
       env: process.env,

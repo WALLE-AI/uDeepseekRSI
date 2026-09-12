@@ -78,8 +78,8 @@ function getInjectedLanguageHint(): string | null {
   return typeof language === 'string' && language.trim() !== '' ? language : null;
 }
 
-function getElectronSystemLanguageHint(): string | null {
-  if (typeof window === 'undefined' || !window.electronAPI) return null;
+function getSystemLanguageHint(): string | null {
+  if (typeof navigator === 'undefined') return null;
   return navigator.language || null;
 }
 
@@ -88,10 +88,13 @@ function getInitialLanguage(): SupportedLanguage {
     typeof window !== 'undefined' && (window as Window & { __backendStartupFailed?: boolean }).__backendStartupFailed;
   const localStorageLanguage = getLocalStorageLanguageHint();
   const injectedLanguage = getInjectedLanguageHint();
-  const systemLanguage = backendStartupFailed ? getElectronSystemLanguageHint() : null;
+  const systemLanguage = getSystemLanguageHint();
+  // An explicit choice always wins, then the backend's stored preference. The system
+  // locale is consulted last, but still ahead of DEFAULT_LANGUAGE — otherwise a first
+  // launch with nothing stored silently starts in English on a non-English machine.
   const hint = backendStartupFailed
     ? injectedLanguage || localStorageLanguage || systemLanguage
-    : localStorageLanguage || injectedLanguage;
+    : localStorageLanguage || injectedLanguage || systemLanguage;
   return normalizeLanguageCode(hint || DEFAULT_LANGUAGE);
 }
 

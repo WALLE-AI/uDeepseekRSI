@@ -9,6 +9,28 @@ import { WebSocketServer, type WebSocket } from 'ws';
 import { Client as McpClient } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { DshApiError } from './apiError';
+import {
+  detailDto,
+  EXPERT_MAX_FILE_BYTES,
+  EXPERT_MAX_MEMBERS,
+  EXPERT_MAX_OWN_SKILLS,
+  EXPERT_MAX_TOTAL_BYTES,
+  EXPERT_TOOL_VOCABULARY,
+  ExpertService,
+  scanItemDto,
+  summaryDto,
+  writeRequestFromBody,
+  type ExpertImportRecord,
+} from './experts';
+import {
+  assertContained,
+  PACKAGE_MAX_FILE_BYTES,
+  PACKAGE_MAX_TOTAL_BYTES,
+  PACKAGE_NAME_PATTERN,
+  parseFrontmatter,
+  validatePackageTree,
+} from './packageTree';
 import { createDshConnection } from './createDshConnection';
 import {
   assistantIdForWorkMode,
@@ -148,6 +170,9 @@ type ConversationCapabilitySnapshot = {
   model?: string;
   permission?: string;
   thoughtLevel?: string;
+  /** Frozen at creation: editing an expert never retroactively changes a running conversation. */
+  expertId?: string;
+  expertRevision?: string;
   catalogRevision: number;
   resolvedAt: number;
 };
@@ -186,17 +211,6 @@ class MemoryProviderCredentialStore implements ProviderCredentialStore {
   }
 }
 
-class DshApiError extends Error {
-  readonly status: number;
-  readonly code: string;
-
-  constructor(status: number, code: string, message = code) {
-    super(message);
-    this.status = status;
-    this.code = code;
-  }
-}
-
 type PersistedState = {
   conversations: StoredConversation[];
   messages: Record<string, StoredMessage[]>;
@@ -208,6 +222,7 @@ type PersistedState = {
   mcpServers: StoredMcpServer[];
   assistantConfigs: Partial<Record<DshWorkMode, StoredAssistantConfig>>;
   skillImportHistory: SkillImportRecord[];
+  expertImportHistory: ExpertImportRecord[];
   catalogRevision: number;
 };
 
@@ -236,6 +251,7 @@ export type DshApiServerOptions = {
   cwd: string;
   dshHome: string;
   skillsDir?: string;
+  expertsDir?: string;
   dataFile: string;
   patchPaths?: string[];
   env?: NodeJS.ProcessEnv;
@@ -257,9 +273,10 @@ export type DshApiServerOptions = {
 const DEFAULT_DSH_PROVIDER_ID = 'deepseek-official';
 const GATEWAY_DSH_PROVIDER_ID = 'aionui-gateway';
 const DEFAULT_MODEL_ID = 'deepseek-v4-flash';
-const SKILL_NAME_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
-const SKILL_MAX_FILE_BYTES = 1024 * 1024;
-const SKILL_MAX_TOTAL_BYTES = 10 * 1024 * 1024;
+const EXPERT_AVATAR_PATH = /^\/api\/experts\/([^/]+)\/avatar$/;
+const SKILL_NAME_PATTERN = PACKAGE_NAME_PATTERN;
+const SKILL_MAX_FILE_BYTES = PACKAGE_MAX_FILE_BYTES;
+const SKILL_MAX_TOTAL_BYTES = PACKAGE_MAX_TOTAL_BYTES;
 
 function defaultAssistantConfig(defaultModelId = DEFAULT_MODEL_ID): StoredAssistantConfig {
   return {
@@ -293,13 +310,7 @@ function scalarDefault(value: unknown, fallback: AssistantScalarDefault): Assist
 }
 
 function parseSkillDocument(content: string): { name: string; description: string } {
-  const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
-  if (!match) throw new DshApiError(400, 'SKILL_INVALID', 'SKILL.md requires YAML frontmatter.');
-  const metadata = parseYaml(match[1]) as unknown;
-  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
-    throw new DshApiError(400, 'SKILL_INVALID', 'Skill frontmatter must be an object.');
-  }
-  const record = metadata as Record<string, unknown>;
+  const record = parseFrontmatter(content, 'SKILL_INVALID').data;
   const name = typeof record.name === 'string' ? record.name.trim() : '';
   const description = typeof record.description === 'string' ? record.description.trim() : '';
   if (!SKILL_NAME_PATTERN.test(name)) throw new DshApiError(400, 'SKILL_INVALID', 'Skill name is invalid.');
@@ -376,25 +387,12 @@ function mcpSecrets(value: unknown): Record<string, string> {
 }
 
 async function validateSkillTree(path: string): Promise<number> {
-  const info = await lstat(path);
-  if (info.isSymbolicLink()) throw new DshApiError(400, 'SKILL_INVALID', 'Symbolic links are not supported.');
-  if (info.isFile()) {
-    if (info.size > SKILL_MAX_FILE_BYTES) {
-      throw new DshApiError(400, 'SKILL_IMPORT_LIMIT_EXCEEDED', 'A skill file exceeds the size limit.');
-    }
-    return info.size;
-  }
-  if (!info.isDirectory()) throw new DshApiError(400, 'SKILL_INVALID', 'The skill source is not a file or directory.');
-  let total = 0;
-  for (const entry of await readdir(path)) {
-    // Skill packages are intentionally validated recursively before copying.
-    // eslint-disable-next-line no-await-in-loop
-    total += await validateSkillTree(join(path, entry));
-    if (total > SKILL_MAX_TOTAL_BYTES) {
-      throw new DshApiError(400, 'SKILL_IMPORT_LIMIT_EXCEEDED', 'The skill package exceeds the size limit.');
-    }
-  }
-  return total;
+  return await validatePackageTree(path, {
+    maxFileBytes: SKILL_MAX_FILE_BYTES,
+    maxTotalBytes: SKILL_MAX_TOTAL_BYTES,
+    invalidCode: 'SKILL_INVALID',
+    limitCode: 'SKILL_IMPORT_LIMIT_EXCEEDED',
+  });
 }
 
 async function skillDocumentPath(path: string): Promise<string> {
@@ -693,6 +691,7 @@ export class DshApiServer {
   readonly #sessionStarts = new Map<string, Promise<DshSession>>();
   readonly #fsWatchers = new Map<WebSocket, Map<string, FSWatcher>>();
   readonly #workspacePreview: WorkspacePreviewService;
+  readonly #experts = new ExpertService({ root: () => this.#expertsDir() });
   #state: PersistedState = {
     conversations: [],
     messages: {},
@@ -704,6 +703,7 @@ export class DshApiServer {
     mcpServers: [],
     assistantConfigs: {},
     skillImportHistory: [],
+    expertImportHistory: [],
     catalogRevision: 0,
   };
   #bridge: DshRuntimePool | null = null;
@@ -712,6 +712,7 @@ export class DshApiServer {
   #persistQueue: Promise<void> = Promise.resolve();
   #port = 0;
   #models: ModelCatalogEntry[] = [{ id: DEFAULT_MODEL_ID, label: DEFAULT_MODEL_ID }];
+  #expertSkillDirs: string[] = [];
   #officePreview: OfficePreviewPort;
   #providerId: string;
   #runtimeEnv: NodeJS.ProcessEnv;
@@ -742,6 +743,7 @@ export class DshApiServer {
     await this.#resolveRuntimeProvider();
     await this.#loadModelCatalog();
     this.#normalizeStoredModels();
+    this.#expertSkillDirs = await this.#experts.skillDirs();
     this.#bridge = this.#createRuntimePool();
 
     const server = createServer((request, response) => {
@@ -797,7 +799,10 @@ export class DshApiServer {
                 ...this.#runtimeEnv,
                 AIONUI_DEEPSEEK_MODELS_JSON: JSON.stringify(this.#models.map((model) => model.id)),
                 AIONUI_DSH_PERSONA: personaForDshWorkMode(mode),
-                AIONUI_SKILLS_DIRS_JSON: JSON.stringify([this.#skillsDir()]),
+                // Expert-private skill dirs are resolved when the backend starts. DSH reads
+                // this per process, so an expert added later only reaches a runtime that
+                // starts after it — surfaced to the user as a restart hint.
+                AIONUI_SKILLS_DIRS_JSON: JSON.stringify([this.#skillsDir(), ...this.#expertSkillDirs]),
               },
               onLatencyStage: ({ stage, durationMs }) => {
                 this.#logLatency({ stage, work_mode: mode, stage_duration_ms: durationMs });
@@ -891,6 +896,7 @@ export class DshApiServer {
         assistantConfigs:
           parsed.assistantConfigs && typeof parsed.assistantConfigs === 'object' ? parsed.assistantConfigs : {},
         skillImportHistory: Array.isArray(parsed.skillImportHistory) ? parsed.skillImportHistory : [],
+        expertImportHistory: Array.isArray(parsed.expertImportHistory) ? parsed.expertImportHistory : [],
         catalogRevision: Number.isInteger(parsed.catalogRevision) ? parsed.catalogRevision : 0,
       };
       for (const conversation of this.#state.conversations) {
@@ -909,6 +915,7 @@ export class DshApiServer {
         mcpServers: [],
         assistantConfigs: {},
         skillImportHistory: [],
+        expertImportHistory: [],
         catalogRevision: 0,
       };
     }
@@ -989,6 +996,160 @@ export class DshApiServer {
 
   #skillsDir(): string {
     return this.#options.skillsDir ?? join(this.#options.dshHome, 'skills');
+  }
+
+  #expertsDir(): string {
+    return this.#options.expertsDir ?? join(this.#options.dshHome, 'experts');
+  }
+
+  async #recordExpertImport(sourcePath: string, result: { name?: string; code?: string }): Promise<void> {
+    this.#state.expertImportHistory.push({
+      id: randomUUID(),
+      operation_id: randomUUID(),
+      source_label: basename(sourcePath),
+      source_path: sourcePath,
+      source_name: basename(sourcePath),
+      ...(result.name ? { expert_name: result.name } : {}),
+      status: result.code ? 'failed' : 'imported',
+      ...(result.code ? { error_code: result.code } : {}),
+      created_at: Date.now(),
+    });
+    this.#state.catalogRevision += 1;
+    await this.#persist();
+  }
+
+  /**
+   * Expert routes. Every literal sub-path is matched before the `:name` pattern — otherwise
+   * `GET /api/experts/paths` resolves as a lookup for an expert named "paths".
+   *
+   * Returns false when nothing matched so the caller can fall through to the 404 handler.
+   */
+  async #routeExperts(
+    path: string,
+    method: string,
+    request: IncomingMessage,
+    response: ServerResponse,
+    url: URL
+  ): Promise<boolean> {
+    if (path === '/api/experts' && method === 'GET') {
+      const experts = await this.#experts.list({
+        mode: url.searchParams.get('mode') ?? undefined,
+        type: url.searchParams.get('type') ?? undefined,
+      });
+      responseData(response, experts.map(summaryDto));
+      return true;
+    }
+    if (path === '/api/experts' && method === 'POST') {
+      const created = await this.#experts.create(writeRequestFromBody(await readJsonBody(request)));
+      this.#state.catalogRevision += 1;
+      await this.#persist();
+      responseData(response, detailDto(created), 201);
+      return true;
+    }
+    if (path === '/api/experts/paths' && method === 'GET') {
+      responseData(response, { user_experts_dir: this.#experts.root });
+      return true;
+    }
+    if (path === '/api/experts/import-limits' && method === 'GET') {
+      responseData(response, {
+        max_file_bytes: EXPERT_MAX_FILE_BYTES,
+        max_total_bytes: EXPERT_MAX_TOTAL_BYTES,
+        max_members: EXPERT_MAX_MEMBERS,
+        max_own_skills: EXPERT_MAX_OWN_SKILLS,
+      });
+      return true;
+    }
+    if (path === '/api/experts/tool-vocabulary' && method === 'GET') {
+      responseData(response, EXPERT_TOOL_VOCABULARY);
+      return true;
+    }
+    if (path === '/api/experts/import-history' && method === 'GET') {
+      responseData(
+        response,
+        this.#state.expertImportHistory.toSorted((left, right) => right.created_at - left.created_at)
+      );
+      return true;
+    }
+    if (path === '/api/experts/validate' && method === 'POST') {
+      await this.#experts.validate(writeRequestFromBody(await readJsonBody(request)));
+      responseData(response, { ok: true });
+      return true;
+    }
+    if (path === '/api/experts/scan' && method === 'POST') {
+      const body = await readJsonBody(request);
+      if (typeof body.folder_path !== 'string') throw new DshApiError(400, 'EXPERT_INVALID');
+      responseData(response, (await this.#experts.scan(body.folder_path)).map(scanItemDto));
+      return true;
+    }
+    if (path === '/api/experts/import' && method === 'POST') {
+      const body = await readJsonBody(request);
+      if (typeof body.expert_path !== 'string') throw new DshApiError(400, 'EXPERT_INVALID');
+      try {
+        const name = await this.#experts.import(body.expert_path, { overwrite: body.overwrite === true });
+        await this.#recordExpertImport(body.expert_path, { name });
+        responseData(response, { expert_name: name, expert_names: [name], failed: [] }, 201);
+      } catch (error) {
+        await this.#recordExpertImport(body.expert_path, {
+          code: error instanceof DshApiError ? error.code : 'EXPERT_INVALID',
+        });
+        throw error;
+      }
+      return true;
+    }
+    if (path === '/api/experts/export' && method === 'POST') {
+      const body = await readJsonBody(request);
+      if (typeof body.name !== 'string' || typeof body.target_dir !== 'string') {
+        throw new DshApiError(400, 'EXPERT_INVALID');
+      }
+      responseData(response, { path: await this.#experts.export(body.name, body.target_dir) });
+      return true;
+    }
+
+    const avatarMatch = path.match(EXPERT_AVATAR_PATH);
+    if (avatarMatch && method === 'GET') {
+      const file = await this.#experts.avatarFile(decodeURIComponent(avatarMatch[1]));
+      const body = await readFile(file);
+      response.writeHead(200, {
+        'Content-Type': mimeType(file),
+        'Content-Length': body.byteLength,
+        // Content is immutable per revision; the catalog bumps the URL only when renamed.
+        'Cache-Control': 'private, max-age=300',
+      });
+      response.end(body);
+      return true;
+    }
+
+    const revealMatch = path.match(/^\/api\/experts\/([^/]+)\/reveal$/);
+    if (revealMatch && method === 'POST') {
+      if (!this.#options.desktopShell) throw new DshApiError(503, 'SHELL_UNAVAILABLE');
+      const expert = await this.#experts.get(decodeURIComponent(revealMatch[1]));
+      await this.#options.desktopShell.showItemInFolder(expert.location);
+      responseData(response, null);
+      return true;
+    }
+
+    const expertMatch = path.match(/^\/api\/experts\/([^/]+)$/);
+    if (!expertMatch) return false;
+    const name = decodeURIComponent(expertMatch[1]);
+    if (method === 'GET') {
+      responseData(response, detailDto(await this.#experts.get(name)));
+      return true;
+    }
+    if (method === 'PUT') {
+      const updated = await this.#experts.update(name, writeRequestFromBody(await readJsonBody(request)));
+      this.#state.catalogRevision += 1;
+      await this.#persist();
+      responseData(response, detailDto(updated));
+      return true;
+    }
+    if (method === 'DELETE') {
+      await this.#experts.remove(name);
+      this.#state.catalogRevision += 1;
+      await this.#persist();
+      responseData(response, null);
+      return true;
+    }
+    return false;
   }
 
   async #listSkills(): Promise<
@@ -1144,9 +1305,34 @@ export class DshApiServer {
       model: scalar('model', config.defaults.model),
       permission: scalar('permission', config.defaults.permission),
       thoughtLevel: scalar('thought_level', config.defaults.thoughtLevel),
+      ...(typeof overrides.expert_id === 'string' && overrides.expert_id.trim()
+        ? { expertId: overrides.expert_id.trim() }
+        : {}),
       catalogRevision: this.#state.catalogRevision,
       resolvedAt: Date.now(),
     };
+  }
+
+  /**
+   * Resolves the requested expert at creation time so a bad id fails when the conversation
+   * is created, not on the first prompt. Also stamps the content revision the snapshot was
+   * resolved against.
+   */
+  async #stampExpert(snapshot: ConversationCapabilitySnapshot, mode: DshWorkMode): Promise<void> {
+    if (!snapshot.expertId) return;
+    const expert = await this.#experts.resolveForMode(snapshot.expertId, mode);
+    snapshot.expertRevision = expert.revision;
+  }
+
+  async #expertPreamble(expertId: string | undefined): Promise<string> {
+    if (!expertId) return '';
+    try {
+      return await this.#experts.systemPrompt(expertId);
+    } catch {
+      // A deleted or broken expert must not block the turn; the conversation degrades to
+      // its plain work mode rather than failing the user's message.
+      return '';
+    }
   }
 
   #conversationCapabilities(conversation: StoredConversation): ConversationCapabilitySnapshot {
@@ -1168,6 +1354,8 @@ export class DshApiServer {
       model: typeof snapshot.model === 'string' ? snapshot.model : undefined,
       permission: typeof snapshot.permission === 'string' ? snapshot.permission : undefined,
       thoughtLevel: typeof snapshot.thoughtLevel === 'string' ? snapshot.thoughtLevel : undefined,
+      expertId: typeof snapshot.expertId === 'string' ? snapshot.expertId : undefined,
+      expertRevision: typeof snapshot.expertRevision === 'string' ? snapshot.expertRevision : undefined,
       catalogRevision: typeof snapshot.catalogRevision === 'number' ? snapshot.catalogRevision : 0,
       resolvedAt: typeof snapshot.resolvedAt === 'number' ? snapshot.resolvedAt : conversation.created_at,
     };
@@ -1863,10 +2051,21 @@ export class DshApiServer {
         (name, index, values) => SKILL_NAME_PATTERN.test(name) && values.indexOf(name) === index
       );
       const skillGestures = skillIds.map((name) => `/${name}`);
-      const promptText = skillGestures.length > 0 ? `${text}\n\n${skillGestures.join(' ')}` : text;
+      // The expert persona is prepended (identity first) while skill gestures stay appended
+      // (action last). DSH's persona is a per-process env var, so a per-conversation expert
+      // can only be delivered in-band on the first prompt of a session.
+      const needsExpertInjection =
+        Boolean(session) &&
+        Boolean(capabilities.expertId) &&
+        conversation.extra.expert_injected_session_id !== session?.sessionId;
+      const expertPreamble = needsExpertInjection ? await this.#expertPreamble(capabilities.expertId) : '';
+      const promptText = [expertPreamble, text, skillGestures.join(' ')].filter(Boolean).join('\n\n');
       this.#traceTurn(conversation.id, 'prompt_sent');
       const stopReason = await this.#bridge?.prompt(conversation.id, promptText, turnId);
       if (needsSkillInjection && session) conversation.extra.skills_injected_session_id = session.sessionId;
+      if (needsExpertInjection && expertPreamble && session) {
+        conversation.extra.expert_injected_session_id = session.sessionId;
+      }
       const active = this.#activeTurns.get(conversation.id);
       if (active?.text) {
         (this.#state.messages[conversation.id] ??= []).push({
@@ -2027,10 +2226,16 @@ export class DshApiServer {
         path.startsWith('/api/providers') ||
         path === '/api/agents/provider-health-check' ||
         path.startsWith('/api/skills') ||
+        // Avatars are exempt: `<img src>` cannot attach the backend token, and the route is
+        // read-only and containment-checked to an image inside the experts root.
+        (path.startsWith('/api/experts') && !EXPERT_AVATAR_PATH.test(path)) ||
         path.startsWith('/api/mcp') ||
         (path.startsWith('/api/assistants/') && method !== 'GET')
       ) {
         this.#assertProviderAccess(request);
+      }
+      if (path.startsWith('/api/experts')) {
+        if (await this.#routeExperts(path, method, request, response, url)) return;
       }
       if (path === '/api/skills' && method === 'GET') {
         responseData(response, await this.#listSkills());
@@ -2094,9 +2299,7 @@ export class DshApiServer {
         if (typeof body.skill_path !== 'string') throw new DshApiError(400, 'SKILL_INVALID');
         const root = await realpath(this.#skillsDir());
         const documentPath = await realpath(await skillDocumentPath(body.skill_path));
-        const pathFromRoot = relative(root, documentPath);
-        if (pathFromRoot.startsWith('..') || isAbsolute(pathFromRoot))
-          throw new DshApiError(403, 'SKILL_PATH_OUTSIDE_ROOT');
+        assertContained(root, documentPath, 'SKILL_PATH_OUTSIDE_ROOT');
         responseData(response, parseSkillDocument(await readFile(documentPath, 'utf8')));
         return;
       }
@@ -2114,10 +2317,7 @@ export class DshApiServer {
         const root = await realpath(this.#skillsDir());
         const source =
           basename(skill.location).toLocaleLowerCase() === 'skill.md' ? dirname(skill.location) : skill.location;
-        const pathFromRoot = relative(root, source);
-        if (!pathFromRoot || pathFromRoot.startsWith('..') || isAbsolute(pathFromRoot)) {
-          throw new DshApiError(403, 'SKILL_PATH_OUTSIDE_ROOT');
-        }
+        assertContained(root, source, 'SKILL_PATH_OUTSIDE_ROOT', { allowRoot: false });
         await rm(source, { recursive: true, force: true });
         this.#state.catalogRevision += 1;
         await this.#persist();
@@ -2571,6 +2771,7 @@ export class DshApiServer {
         const assistantName = this.#workModeName(workMode);
         const extra = body.extra && typeof body.extra === 'object' ? (body.extra as Record<string, unknown>) : {};
         const capabilitySnapshot = this.#resolveCapabilities(workMode, assistantBody, extra);
+        await this.#stampExpert(capabilitySnapshot, workMode);
         const {
           selected_session_mcp_servers: _selectedSessionMcpServers,
           preset_enabled_skills: _presetEnabledSkills,

@@ -75,7 +75,7 @@ try {
   await bridge.closeSession('smoke-conversation');
   if (bridge.getSession('smoke-conversation')) throw new Error('closed session remained published');
   verdict = 'GO';
-  detail = `Mapped ${updates.length} updates across: ${[...kinds].sort().join(', ')}.`;
+  detail = `Mapped ${updates.length} updates across: ${[...kinds].toSorted().join(', ')}.`;
   console.log(`S0-8 verdict: ${verdict}`);
   console.log(detail);
   console.log(`session id assigned: ${Boolean(session.sessionId)}`);

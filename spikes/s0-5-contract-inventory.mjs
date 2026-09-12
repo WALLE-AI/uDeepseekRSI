@@ -132,19 +132,19 @@ function scanBridge() {
       collectObject(declaration.name.text, declaration.initializer, source, entries);
     }
   }
-  return entries.sort((a, b) => a.name.localeCompare(b.name));
+  return entries.toSorted((a, b) => a.name.localeCompare(b.name));
 }
 
 function scanSchema() {
   const text = readFileSync(SCHEMA_FILE, 'utf8');
   const tables = [...text.matchAll(/CREATE TABLE IF NOT EXISTS\s+([a-z_]+)/g)].map((match) => match[1]);
   const version = Number(text.match(/CURRENT_DB_VERSION\s*=\s*(\d+)/)?.[1]);
-  return { tables: [...new Set(tables)].sort(), version };
+  return { tables: [...new Set(tables)].toSorted(), version };
 }
 
 const entries = scanBridge();
 const schema = scanSchema();
-const namespaces = [...new Set(entries.map((entry) => entry.name.split('.')[0]))].sort();
+const namespaces = [...new Set(entries.map((entry) => entry.name.split('.')[0]))].toSorted();
 const counts = Object.fromEntries(
   ['ACP 直接满足', 'bridge 领域逻辑', 'bridge 持久化', '隐藏入口'].map((kind) => [
     kind,

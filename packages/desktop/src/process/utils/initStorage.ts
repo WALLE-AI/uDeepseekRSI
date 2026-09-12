@@ -43,6 +43,7 @@ const STORAGE_PATH = {
   assistants: 'assistants',
   skills: 'skills',
   cronSkills: 'cron-skills',
+  experts: 'experts',
 };
 
 /** Legacy builtin-skills cache directory, cleaned up at startup after the
@@ -299,6 +300,14 @@ const getSkillsDir = () => {
 };
 
 /**
+ * 获取专家包目录路径
+ * Get expert packages directory path — one directory per expert, sibling to skills.
+ */
+const getExpertsDir = () => {
+  return path.join(cacheDir, STORAGE_PATH.experts);
+};
+
+/**
  * Get the directory for per-cron-job SKILL.md files.
  * Each cron job gets its own subdirectory: {cronSkillsDir}/{job_id}/SKILL.md
  */
@@ -336,6 +345,9 @@ const ensureAssistantDirs = async (): Promise<void> => {
 
   const cronSkillsDir = getCronSkillsDir();
   if (!existsSync(cronSkillsDir)) mkdirSync(cronSkillsDir);
+
+  const expertsDir = getExpertsDir();
+  if (!existsSync(expertsDir)) mkdirSync(expertsDir);
 
   if (!existsSync(assistantsDir)) mkdirSync(assistantsDir);
 };
@@ -451,6 +463,13 @@ export const getSystemDir = () => {
  * 获取助手规则目录路径（供其他模块使用）
  * Get assistant rules directory path (for use by other modules)
  */
-export { getAssistantsDir, getSkillsDir, getCronSkillsDir, BUILTIN_IMAGE_GEN_ID, getBuiltinMcpScriptPath };
+export {
+  getAssistantsDir,
+  getSkillsDir,
+  getExpertsDir,
+  getCronSkillsDir,
+  BUILTIN_IMAGE_GEN_ID,
+  getBuiltinMcpScriptPath,
+};
 
 export default initStorage;
