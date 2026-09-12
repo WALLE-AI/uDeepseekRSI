@@ -6,7 +6,8 @@
 
 import { ipcBridge } from '@/common';
 import { notifyManualRestartRequired } from '@/renderer/utils/appRestart';
-import { Alert, Button, Message, Modal, Switch } from '@arco-design/web-react';
+import { Alert, Button, Input, Message, Modal, Switch } from '@arco-design/web-react';
+import { Delete, Plus } from '@icon-park/react';
 import React, { useCallback, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import useSWR, { mutate } from 'swr';
@@ -35,6 +36,14 @@ const BrowserDataSection: React.FC = () => {
   const [clearing, setClearing] = useState(false);
   const { data: cdpStatus, isLoading } = useSWR('cdp.status', () => ipcBridge.application.getCdpStatus.invoke());
   const [switchLoading, setSwitchLoading] = useState(false);
+  const [credentialModalVisible, setCredentialModalVisible] = useState(false);
+  const [credentialSaving, setCredentialSaving] = useState(false);
+  const [origin, setOrigin] = useState('');
+  const [clientId, setClientId] = useState('');
+  const [clientSecret, setClientSecret] = useState('');
+  const { data: credentialResponse } = useSWR('browser.managedCredentials', () =>
+    ipcBridge.application.listManagedBrowserCredentials.invoke()
+  );
 
   const status = cdpStatus?.data;
 
@@ -45,6 +54,16 @@ const BrowserDataSection: React.FC = () => {
    */
   const agentControlEnabled = status?.configEnabled ?? false;
   const hasPendingChange = !isLoading && status !== undefined && status.configEnabled !== status.enabled;
+  const healthText = status
+    ? t(
+        {
+          disabled: 'settings.browserData.health.disabled',
+          noTarget: 'settings.browserData.health.noTarget',
+          ready: 'settings.browserData.health.ready',
+        }[status.health],
+        { count: status.targetCount }
+      )
+    : null;
 
   const handleToggleAgentControl = useCallback(
     async (checked: boolean) => {
@@ -100,6 +119,57 @@ const BrowserDataSection: React.FC = () => {
     });
   }, [t]);
 
+  const closeCredentialModal = useCallback(() => {
+    setCredentialModalVisible(false);
+    setOrigin('');
+    setClientId('');
+    setClientSecret('');
+  }, []);
+
+  const handleSaveCredential = useCallback(async () => {
+    setCredentialSaving(true);
+    try {
+      const result = await ipcBridge.application.saveManagedBrowserCredential.invoke({
+        origin: origin.trim(),
+        clientId: clientId.trim(),
+        clientSecret,
+      });
+      if (!result.success) {
+        Message.error(t('settings.browserData.access.saveFailed'));
+        return;
+      }
+      await mutate('browser.managedCredentials');
+      Message.success(t('settings.browserData.access.saved'));
+      closeCredentialModal();
+    } catch {
+      Message.error(t('settings.browserData.access.saveFailed'));
+    } finally {
+      setCredentialSaving(false);
+    }
+  }, [clientId, clientSecret, closeCredentialModal, origin, t]);
+
+  const handleRemoveCredential = useCallback(
+    (id: string, credentialOrigin: string) => {
+      Modal.confirm({
+        title: t('settings.browserData.access.removeTitle'),
+        content: t('settings.browserData.access.removeConfirm', { origin: credentialOrigin }),
+        okButtonProps: { status: 'danger' },
+        onOk: async () => {
+          const result = await ipcBridge.application.removeManagedBrowserCredential.invoke({ id });
+          if (!result.success) {
+            Message.error(t('settings.browserData.access.removeFailed'));
+            return;
+          }
+          await mutate('browser.managedCredentials');
+          Message.success(t('settings.browserData.access.removed'));
+        },
+      });
+    },
+    [t]
+  );
+
+  const credentials = credentialResponse?.success ? credentialResponse.data : [];
+
   return (
     <div className='px-[12px] md:px-[32px] py-16px bg-2 rd-16px'>
       <div className='text-14px font-medium text-t-primary mb-8px'>{t('settings.browserData.title')}</div>
@@ -130,11 +200,76 @@ const BrowserDataSection: React.FC = () => {
         />
       )}
 
+      {healthText && (
+        <Alert type={status?.health === 'ready' ? 'success' : 'info'} content={healthText} className='mb-8px' />
+      )}
+
+      <PreferenceRow
+        label={t('settings.browserData.access.label')}
+        description={t('settings.browserData.access.description')}
+      >
+        <Button size='small' icon={<Plus />} onClick={() => setCredentialModalVisible(true)}>
+          {t('settings.browserData.access.add')}
+        </Button>
+      </PreferenceRow>
+
+      {credentials?.map((credential) => (
+        <div
+          key={credential.id}
+          className='flex items-center justify-between gap-12px py-8px border-b border-b-solid border-border-2'
+        >
+          <div className='min-w-0'>
+            <div className='text-13px text-t-primary break-all'>{credential.origin}</div>
+            <div className='text-12px text-t-secondary break-all'>{credential.clientId}</div>
+          </div>
+          <Button
+            size='mini'
+            type='text'
+            status='danger'
+            icon={<Delete />}
+            title={t('settings.browserData.access.remove')}
+            onClick={() => handleRemoveCredential(credential.id, credential.origin)}
+          />
+        </div>
+      ))}
+
       <PreferenceRow label={t('settings.browserData.clearLabel')} description={t('settings.browserData.clearDesc')}>
         <Button size='small' status='danger' loading={clearing} onClick={handleClear}>
           {t('common.clear')}
         </Button>
       </PreferenceRow>
+
+      <Modal
+        title={t('settings.browserData.access.addTitle')}
+        visible={credentialModalVisible}
+        okText={t('common.save')}
+        cancelText={t('common.cancel')}
+        confirmLoading={credentialSaving}
+        okButtonProps={{ disabled: !origin.trim() || !clientId.trim() || !clientSecret }}
+        onOk={handleSaveCredential}
+        onCancel={closeCredentialModal}
+        unmountOnExit
+      >
+        <div className='flex flex-col gap-12px'>
+          <div>
+            <div className='text-13px text-t-secondary mb-4px'>{t('settings.browserData.access.origin')}</div>
+            <Input
+              value={origin}
+              placeholder={t('settings.browserData.access.originPlaceholder')}
+              onChange={setOrigin}
+            />
+          </div>
+          <div>
+            <div className='text-13px text-t-secondary mb-4px'>{t('settings.browserData.access.clientId')}</div>
+            <Input value={clientId} onChange={setClientId} />
+          </div>
+          <div>
+            <div className='text-13px text-t-secondary mb-4px'>{t('settings.browserData.access.clientSecret')}</div>
+            <Input.Password value={clientSecret} visibilityToggle onChange={setClientSecret} />
+          </div>
+          <Alert type='warning' content={t('settings.browserData.access.securityNotice')} />
+        </div>
+      </Modal>
     </div>
   );
 };

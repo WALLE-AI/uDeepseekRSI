@@ -124,7 +124,15 @@
     "title": "Документ PDF",
     "pathMissing": "Шлях до файлу PDF відсутній",
     "loadFailed": "Не вдалося завантажити документ PDF",
-    "unableDisplay": "Неможливо відобразити файл PDF"
+    "unableDisplay": "Неможливо відобразити файл PDF",
+    "previousPage": "Попередня сторінка",
+    "nextPage": "Наступна сторінка",
+    "fitWidth": "За шириною",
+    "errors": {
+      "password": "PDF із паролем поки не підтримуються",
+      "invalid": "PDF пошкоджений або має неправильний формат",
+      "missing": "PDF-файл більше не існує"
+    }
   },
   "html": {
     "elementSelected": "Вибраний елемент: {{path}}",
@@ -149,10 +157,19 @@
     "installHint": "Встановіть OfficeCLI зі сторінки офіційних релізів iOfficeAI/OfficeCLI"
   },
   "browser": {
+    "control": {
+      "userTakeover": "You took control. Agent write actions are paused.",
+      "challengeRequired": "Site verification requires your input. Complete it in this tab, then resume.",
+      "rateLimited": "This site is rate limiting requests. Agent actions are paused until {{retryAt}}.",
+      "authenticationRequired": "Sign in in this tab, then resume Agent control.",
+      "accessDenied": "The site denied access. Check your account permissions before resuming.",
+      "resume": "Resume Agent"
+    },
+    "navigationFailed": "Не вдалося завантажити цю сторінку",
     "newTab": "Нова вкладка",
     "addressPlaceholder": "Введіть URL або пошуковий запит",
     "agentActiveTooltip": "Агент керує цією вкладкою",
-    "tabLimitReached": "Досягнуто ліміт вкладок ({{count}}). Найстарішу вкладку використано повторно.",
+    "tabLimitReached": "Досягнуто ліміт вкладок ({{count}}). Закрийте вкладку перед відкриттям нової.",
     "agentFirstUseTitle": "Агент використовує вбудований браузер",
     "agentFirstUseContent": "Він може відкривати сторінки, натискати та читати вміст у цій панелі. Ваш вхід в акаунти зберігається.",
     "agentFirstUseAction": "Відкрити налаштування"

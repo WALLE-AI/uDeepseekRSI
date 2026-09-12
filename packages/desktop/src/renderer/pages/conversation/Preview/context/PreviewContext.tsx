@@ -11,7 +11,6 @@ import { chatFileRefKey, isChatFileRef } from '@/common/types/chatFile';
 import { emitter } from '@/renderer/utils/emitter';
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { BROWSER_BLANK_URL, BROWSER_TAB_FALLBACK_TITLE, MAX_BROWSER_TABS } from '../browser/constants';
-import { isBrowserMcpActivity, isBrowserMcpSettled } from '../browser/agentActivity';
 import { maybeNotifyFirstAgentBrowserUse } from '../browser/firstUseNotice';
 import { listPersistedPreviewScopeKeys, previewScopeStorageKey, type PreviewScopeKey } from './previewScope';
 import { peKey } from '@/renderer/pages/conversation/explorer/explorerModel';
@@ -42,6 +41,14 @@ export type WorkspacePreviewOptions = {
   mode?: 'static' | 'vite';
   confirmationToken?: string;
 };
+
+export type BrowserControlState =
+  | 'ready'
+  | 'userTakeover'
+  | 'challengeRequired'
+  | 'rateLimited'
+  | 'authenticationRequired'
+  | 'accessDenied';
 
 export interface PreviewMetadata {
   language?: string;
@@ -78,6 +85,9 @@ export interface PreviewMetadata {
   missingFile?: boolean; // 文件不存在或无法读取 / Whether the referenced file is missing or unreadable
   favicon?: string; // 浏览器 tab 的站点图标 URL / Site icon URL for browser tabs
   agentActive?: boolean; // Agent 正在操作该浏览器 tab / Agent is currently driving this browser tab
+  browserControlRequestId?: string; // Correlates CDP Target.createTarget with the mounted webview
+  browserControlState?: BrowserControlState;
+  browserControlRetryAt?: number | null;
   workspacePreview?: WorkspacePreviewMetadata;
 }
 
@@ -819,7 +829,10 @@ export const PreviewProvider: React.FC<{ children: React.ReactNode }> = ({ child
         !existingTab &&
         type === 'browser' &&
         currentTabs.filter((tab) => tab.content_type === 'browser').length >= MAX_BROWSER_TABS;
-      if (atBrowserTabLimit) setBrowserTabLimitHitAt(Date.now());
+      if (atBrowserTabLimit) {
+        setBrowserTabLimitHitAt(Date.now());
+        return;
+      }
 
       // Tab 标题：优先使用文件名，并从 title 中提取实际文件名
       // Tab title: Prefer file_name and extract actual filename from title
@@ -846,14 +859,9 @@ export const PreviewProvider: React.FC<{ children: React.ReactNode }> = ({ child
         return activeTab && !activeTab.isDirty ? activeTab : null;
       })();
 
-      // 上限触发时被复用的最旧浏览器 tab / Oldest browser tab reused at the cap
-      const cappedTarget = atBrowserTabLimit
-        ? (currentTabs.find((tab) => tab.content_type === 'browser') ?? null)
-        : null;
-
       // 生成唯一 ID / Generate unique ID
       const newTabId = `${type}-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
-      const targetTabId = existingTab?.id ?? replaceTarget?.id ?? cappedTarget?.id ?? newTabId;
+      const targetTabId = existingTab?.id ?? replaceTarget?.id ?? newTabId;
 
       setTabs((prevTabs) => {
         if (existingTab) {
@@ -887,12 +895,6 @@ export const PreviewProvider: React.FC<{ children: React.ReactNode }> = ({ child
         if (replaceTarget) {
           const replacedTab: PreviewTab = { ...newTab, id: replaceTarget.id };
           return prevTabs.map((tab) => (tab.id === replaceTarget.id ? replacedTab : tab));
-        }
-
-        if (cappedTarget) {
-          return prevTabs.map((tab) =>
-            tab.id === cappedTarget.id ? { ...tab, content: new_content, title, metadata: meta } : tab
-          );
         }
 
         return [...prevTabs, newTab];
@@ -1426,75 +1428,38 @@ export const PreviewProvider: React.FC<{ children: React.ReactNode }> = ({ child
     // 监听 IPC 事件（来自主进程，如 chrome-devtools MCP 导航）/ Listen to IPC event (from main process, e.g., chrome-devtools MCP navigation)
     const unsubscribeBackend = ipcBridge.preview.open.on(handleIpcPreviewOpen);
     const unsubscribeLocal = ipcBridge.preview.openLocal?.on(handleIpcPreviewOpen) ?? (() => {});
+    const unsubscribeBrowserControl =
+      ipcBridge.preview.browserControlLocal?.on((command) => {
+        const target = tabsRef.current.find((tab) => tab.id === command.tabId && tab.content_type === 'browser');
+        if (!target) return;
+        if (command.action === 'activate') {
+          setActiveTabId(target.id);
+          setIsOpen(true);
+          return;
+        }
+        closeTab(target.id);
+      }) ?? (() => {});
+    const unsubscribeBrowserControlState =
+      ipcBridge.preview.browserControlStateLocal?.on((event) => {
+        updateTab(event.tabId, {
+          metadata: { browserControlState: event.state, browserControlRetryAt: event.retryAt },
+        });
+      }) ?? (() => {});
+    const unsubscribeBrowserControlActivity =
+      ipcBridge.preview.browserControlActivityLocal?.on((event) => {
+        updateTab(event.tabId, { metadata: { agentActive: event.active } });
+        if (event.active) maybeNotifyFirstAgentBrowserUse();
+      }) ?? (() => {});
 
     return () => {
       emitter.off('preview.open', handleEmitterPreviewOpen);
       unsubscribeBackend();
       unsubscribeLocal();
+      unsubscribeBrowserControl();
+      unsubscribeBrowserControlState();
+      unsubscribeBrowserControlActivity();
     };
-  }, [openPreview]);
-
-  /**
-   * 跟踪 Agent 对应用内浏览器的操作，并驱动两件事：
-   * 1. tab 上的活动角标（持续显示，用户随时知道浏览器不是自己在动）
-   * 2. 首次操作时的一次性提示（不打断、不需要确认）
-   *
-   * 为什么监听工具调用流而不是等浏览器自己上报：Agent 是通过 CDP 直接操作 webview
-   * 的，webview 只会看到"页面变了"，分不清是用户点的还是 Agent 点的。工具调用流是
-   * 唯一能区分二者的信号。
-   *
-   * Tracks the agent's use of the in-app browser and drives two things: the
-   * persistent activity badge on the tab (so the user always knows the browser is
-   * not moving on its own), and a one-time first-use notice.
-   *
-   * Why watch the tool-call stream rather than have the browser report itself: the
-   * agent drives the webview through CDP, and the webview only sees "the page
-   * changed" — indistinguishable from a user click. The tool-call stream is the only
-   * signal that separates the two.
-   */
-  useEffect(() => {
-    const markBrowserTabs = (agentActive: boolean) => {
-      setTabs((prevTabs) => {
-        // 只标记浏览器 tab；没有浏览器 tab 时返回原数组，避免无意义的重渲染
-        // Only browser tabs are marked; return the same array when there are none
-        // so no pointless re-render is triggered.
-        if (
-          !prevTabs.some((tab) => tab.content_type === 'browser' && Boolean(tab.metadata?.agentActive) !== agentActive)
-        ) {
-          return prevTabs;
-        }
-        return prevTabs.map((tab) =>
-          tab.content_type === 'browser' ? { ...tab, metadata: { ...tab.metadata, agentActive } } : tab
-        );
-      });
-    };
-
-    /**
-     * 这个订阅纯粹是锦上添花（一个角标 + 一次提示）。如果消息流不可用（WebUI
-     * 未连接、测试环境未提供该通道），不能让整个预览面板挂掉 —— 预览是主功能，
-     * 角标不是。
-     *
-     * This subscription is purely cosmetic (a badge and a one-time notice). If the
-     * message stream is unavailable (WebUI not connected, a test harness not
-     * providing the channel), it must not take the whole preview panel down —
-     * previewing is the primary feature, the badge is not.
-     */
-    const stream = ipcBridge.conversation?.responseStream;
-    if (!stream?.on) return;
-
-    const unsubscribe = stream.on((message) => {
-      if (isBrowserMcpActivity(message.type, message.data)) {
-        markBrowserTabs(true);
-        maybeNotifyFirstAgentBrowserUse();
-        return;
-      }
-      if (isBrowserMcpSettled(message.type, message.data)) {
-        markBrowserTabs(false);
-      }
-    });
-
-    return unsubscribe;
-  }, []);
+  }, [closeTab, openPreview, updateTab]);
 
   const previewContextValue = useMemo(() => {
     return {

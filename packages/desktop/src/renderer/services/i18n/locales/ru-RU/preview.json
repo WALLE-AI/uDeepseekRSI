@@ -124,7 +124,15 @@
     "title": "Документ PDF",
     "pathMissing": "Путь к PDF-файлу отсутствует",
     "loadFailed": "Не удалось загрузить PDF-документ",
-    "unableDisplay": "Невозможно отобразить PDF-файл"
+    "unableDisplay": "Невозможно отобразить PDF-файл",
+    "previousPage": "Предыдущая страница",
+    "nextPage": "Следующая страница",
+    "fitWidth": "По ширине",
+    "errors": {
+      "password": "PDF с паролем пока не поддерживаются",
+      "invalid": "PDF повреждён или имеет неверный формат",
+      "missing": "PDF-файл больше не существует"
+    }
   },
   "html": {
     "elementSelected": "Выбранный элемент: {{path}}",
@@ -149,10 +157,19 @@
     "installHint": "Установите OfficeCLI со страницы официальных выпусков iOfficeAI/OfficeCLI"
   },
   "browser": {
+    "control": {
+      "userTakeover": "You took control. Agent write actions are paused.",
+      "challengeRequired": "Site verification requires your input. Complete it in this tab, then resume.",
+      "rateLimited": "This site is rate limiting requests. Agent actions are paused until {{retryAt}}.",
+      "authenticationRequired": "Sign in in this tab, then resume Agent control.",
+      "accessDenied": "The site denied access. Check your account permissions before resuming.",
+      "resume": "Resume Agent"
+    },
+    "navigationFailed": "Не удалось загрузить эту страницу",
     "newTab": "Новая вкладка",
     "addressPlaceholder": "Введите URL или поисковый запрос",
     "agentActiveTooltip": "Агент управляет этой вкладкой",
-    "tabLimitReached": "Достигнут предел вкладок ({{count}}). Самая старая вкладка была использована повторно.",
+    "tabLimitReached": "Достигнут предел вкладок ({{count}}). Закройте вкладку перед открытием новой.",
     "agentFirstUseTitle": "Агент использует встроенный браузер",
     "agentFirstUseContent": "Он может открывать страницы, нажимать и читать содержимое в этой панели. Ваш вход в аккаунты сохраняется.",
     "agentFirstUseAction": "Открыть настройки"

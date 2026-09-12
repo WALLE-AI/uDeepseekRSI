@@ -87,8 +87,8 @@ if (isWebUI || isResetPassword) {
 // config from it, handing users an address that could never connect.
 //
 // Do not move the bridge onto a fixed port to bring that bookkeeping back: the ephemeral
-// port is the only real barrier against same-user local processes, because the token leaks
-// through the unauthenticated discovery endpoint (see the threat model note in cdpBridge.ts).
+// The random port reduces accidental collisions; the inherited token is the control credential.
+// Unauthenticated discovery deliberately never includes it.
 //
 // Configuration file: userData/cdp.config.json
 // - enabled: boolean - whether agent browser control is enabled (default: on)

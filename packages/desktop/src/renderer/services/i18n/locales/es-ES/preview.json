@@ -122,7 +122,15 @@
     "title": "Documento PDF",
     "pathMissing": "Falta la ruta del archivo PDF",
     "loadFailed": "Error al cargar el documento PDF",
-    "unableDisplay": "No se puede mostrar el archivo PDF"
+    "unableDisplay": "No se puede mostrar el archivo PDF",
+    "previousPage": "Página anterior",
+    "nextPage": "Página siguiente",
+    "fitWidth": "Ajustar al ancho",
+    "errors": {
+      "password": "Aún no se admiten archivos PDF protegidos con contraseña",
+      "invalid": "Este PDF está dañado o no es válido",
+      "missing": "El archivo PDF ya no existe"
+    }
   },
   "html": {
     "elementSelected": "Elemento seleccionado: {{path}}",
@@ -147,10 +155,19 @@
     "installHint": "Instala OfficeCLI desde la página oficial de versiones de iOfficeAI/OfficeCLI"
   },
   "browser": {
+    "control": {
+      "userTakeover": "You took control. Agent write actions are paused.",
+      "challengeRequired": "Site verification requires your input. Complete it in this tab, then resume.",
+      "rateLimited": "This site is rate limiting requests. Agent actions are paused until {{retryAt}}.",
+      "authenticationRequired": "Sign in in this tab, then resume Agent control.",
+      "accessDenied": "The site denied access. Check your account permissions before resuming.",
+      "resume": "Resume Agent"
+    },
+    "navigationFailed": "No se pudo cargar esta página",
     "newTab": "Nueva pestaña",
     "addressPlaceholder": "Escribe una URL o busca",
     "agentActiveTooltip": "El agente está operando esta pestaña",
-    "tabLimitReached": "Se alcanzó el límite de pestañas ({{count}}). Se reutilizó la pestaña más antigua.",
+    "tabLimitReached": "Se alcanzó el límite de pestañas ({{count}}). Cierra una pestaña antes de abrir otra.",
     "agentFirstUseTitle": "El agente está usando el navegador integrado",
     "agentFirstUseContent": "Puede abrir páginas, hacer clic y leer contenido en este panel. Tu sesión se conserva.",
     "agentFirstUseAction": "Abrir ajustes"

@@ -8,6 +8,7 @@ import type { BrowserWindow } from 'electron';
 import { app, session } from 'electron';
 import { ipcBridge } from '@/common';
 import { BROWSER_SESSION_PARTITION } from '@/common/config/constants';
+import { getManagedBrowserCredentialStore } from '@process/services/browser-control/managedCredentialStore';
 import { ProcessConfig } from '@process/utils/initStorage';
 import { getZoomFactor, setZoomFactor } from '@process/utils/zoom';
 import { getCdpStatus, updateCdpConfig } from '@process/utils/configureChromium';
@@ -177,8 +178,16 @@ export function initApplicationBridge(): void {
   ipcBridge.application.getCdpStatus.provider(async () => {
     try {
       const status = getCdpStatus();
-      // If port is set, CDP is considered enabled (verification is optional)
-      return { success: true, data: status };
+      const handle = getCdpBridgeHandle();
+      const targetCount = handle?.targetCount() ?? 0;
+      return {
+        success: true,
+        data: {
+          ...status,
+          health: !status.enabled ? 'disabled' : targetCount > 0 ? 'ready' : 'noTarget',
+          targetCount,
+        },
+      };
     } catch (e) {
       return { success: false, msg: e.message || e.toString() };
     }
@@ -222,7 +231,7 @@ export function initApplicationBridge(): void {
     }
   });
 
-  ipcBridge.application.reportBrowserWebContentsId.provider(async ({ webContentsId }) => {
+  ipcBridge.application.reportBrowserWebContentsId.provider(async (registration) => {
     /**
      * 把单目标 CDP 通道附加到侧边浏览器。
      *
@@ -239,12 +248,61 @@ export function initApplicationBridge(): void {
     try {
       const handle = getCdpBridgeHandle();
       if (!handle) return { success: false, msg: 'Agent browser control is not enabled.' };
-      const result = handle.attach(webContentsId);
+      const result = handle.register(registration);
       if (result.ok === false) return { success: false, msg: result.reason };
-      console.log(`[CDP] Attached in-app browser webContents ${webContentsId}.`);
+      console.log(`[CDP] Registered Browser target ${result.targetId} for tab ${registration.tabId}.`);
+      return { success: true, data: { targetId: result.targetId } };
+    } catch (e) {
+      return { success: false, msg: e instanceof Error ? e.message : String(e) };
+    }
+  });
+
+  ipcBridge.application.detachBrowserWebContentsId.provider(async ({ webContentsId }) => {
+    try {
+      const handle = getCdpBridgeHandle();
+      if (!handle) return { success: true };
+      handle.unregister(webContentsId);
       return { success: true };
     } catch (e) {
       return { success: false, msg: e instanceof Error ? e.message : String(e) };
+    }
+  });
+
+  ipcBridge.application.pauseBrowserTarget.provider(async ({ tabId }) => {
+    const handle = getCdpBridgeHandle();
+    if (!handle) return { success: false, msg: 'Agent browser control is not enabled.' };
+    return handle.pause(tabId) ? { success: true } : { success: false, msg: 'Browser target is not available.' };
+  });
+
+  ipcBridge.application.resumeBrowserTarget.provider(async ({ tabId }) => {
+    const handle = getCdpBridgeHandle();
+    if (!handle) return { success: false, msg: 'Agent browser control is not enabled.' };
+    return handle.resume(tabId) ? { success: true } : { success: false, msg: 'Browser target is not available.' };
+  });
+
+  ipcBridge.application.listManagedBrowserCredentials.provider(async () => {
+    try {
+      return { success: true, data: await getManagedBrowserCredentialStore().list() };
+    } catch (error) {
+      return { success: false, msg: error instanceof Error ? error.message : String(error) };
+    }
+  });
+
+  ipcBridge.application.saveManagedBrowserCredential.provider(async (credential) => {
+    try {
+      const id = await getManagedBrowserCredentialStore().save(credential);
+      return { success: true, data: { id } };
+    } catch (error) {
+      return { success: false, msg: error instanceof Error ? error.message : String(error) };
+    }
+  });
+
+  ipcBridge.application.removeManagedBrowserCredential.provider(async ({ id }) => {
+    try {
+      await getManagedBrowserCredentialStore().remove(id);
+      return { success: true };
+    } catch (error) {
+      return { success: false, msg: error instanceof Error ? error.message : String(error) };
     }
   });
 

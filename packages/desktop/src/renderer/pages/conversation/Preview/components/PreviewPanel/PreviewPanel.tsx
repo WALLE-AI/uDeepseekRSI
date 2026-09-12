@@ -36,7 +36,6 @@ import HTMLRenderer from '../renderers/HTMLRenderer';
 import ImagePreview from '../viewers/ImageViewer';
 import MarkdownEditor from '../editors/MarkdownEditor';
 import MarkdownPreview from '../viewers/MarkdownViewer';
-import PDFPreview from '../viewers/PDFViewer';
 import OfficeDocPreview from '../viewers/OfficeDocViewer';
 import PptViewer from '../viewers/PptViewer';
 import CodeEditor from '../editors/CodeEditor';
@@ -63,6 +62,8 @@ import {
 import { usePreviewKeyboardShortcuts, useScrollSync, useTabOverflow, useThemeDetection } from '../../hooks';
 import { useTranslation } from 'react-i18next';
 import './preview.css';
+
+const PDFPreview = React.lazy(() => import('../viewers/PDFViewer'));
 
 /**
  * 预览面板主组件
@@ -1114,12 +1115,18 @@ const PreviewPanel: React.FC = () => {
       );
     } else if (content_type === 'pdf') {
       return (
-        <PDFPreview
-          tabId={activeTabId ?? undefined}
-          fileRef={metadata?.fileRef}
-          file_path={metadata?.file_path}
-          content={content}
-        />
+        <React.Suspense
+          fallback={
+            <div className='h-full flex items-center justify-center text-t-secondary'>{t('preview.loading')}</div>
+          }
+        >
+          <PDFPreview
+            tabId={activeTabId ?? undefined}
+            fileRef={metadata?.fileRef}
+            file_path={metadata?.file_path}
+            content={content}
+          />
+        </React.Suspense>
       );
     } else if (content_type === 'ppt') {
       return (

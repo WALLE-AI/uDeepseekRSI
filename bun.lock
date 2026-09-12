@@ -64,6 +64,7 @@
         "better-sqlite3": "^12.4.1",
         "buffer": "^6.0.3",
         "builder-util-runtime": "9.5.1",
+        "chrome-devtools-mcp": "1.9.0",
         "classnames": "^2.5.1",
         "cookie": "^1.0.2",
         "cookie-parser": "^1.4.7",
@@ -95,6 +96,7 @@
         "multer": "^2.1.1",
         "officeparser": "^5.2.2",
         "openai": "^5.12.2",
+        "pdfjs-dist": "5.5.207",
         "postcss": "^8.5.8",
         "pptx2json": "^0.0.10",
         "process": "^0.11.10",
@@ -2349,6 +2351,8 @@
     "chokidar": ["chokidar@3.6.0", "https://registry.npmmirror.com/chokidar/-/chokidar-3.6.0.tgz", { "dependencies": { "anymatch": "~3.1.2", "braces": "~3.0.2", "glob-parent": "~5.1.2", "is-binary-path": "~2.1.0", "is-glob": "~4.0.1", "normalize-path": "~3.0.0", "readdirp": "~3.6.0" }, "optionalDependencies": { "fsevents": "~2.3.2" } }, "sha512-7VT13fmjotKpGipCW9JEQAusEPE+Ei8nl6/g4FBAmIm0GOOLMua9NDDo/DWp0ZAxCr3cPq5ZpBqmPAQgDda2Pw=="],
 
     "chownr": ["chownr@3.0.0", "https://registry.npmmirror.com/chownr/-/chownr-3.0.0.tgz", {}, "sha512-+IxzY9BZOQd/XuYPRmrvEVjF/nqj5kgT4kEq7VofrDoM1MxoRjEWkrCC3EtLi59TVawxTAn+orJwFQcrqEN1+g=="],
+
+    "chrome-devtools-mcp": ["chrome-devtools-mcp@1.9.0", "https://registry.npmmirror.com/chrome-devtools-mcp/-/chrome-devtools-mcp-1.9.0.tgz", { "peerDependencies": { "@blackwell-systems/gcf": "^2.2.2", "@toon-format/toon": "^4.1.0" }, "optionalPeers": ["@blackwell-systems/gcf", "@toon-format/toon"], "bin": { "chrome-devtools": "build/src/bin/chrome-devtools.js", "chrome-devtools-mcp": "build/src/bin/chrome-devtools-mcp.js" } }, "sha512-RnzXoJiUQ44hpOihWk90uOhLD/CnwDkDy0ldHMZONJ2nYQ+dWN1fq1luHHqyd+7FuYnyIlCY6uTThbN5ut9kSQ=="],
 
     "chromium-pickle-js": ["chromium-pickle-js@0.2.0", "https://registry.npmmirror.com/chromium-pickle-js/-/chromium-pickle-js-0.2.0.tgz", {}, "sha512-1R5Fho+jBq0DDydt+/vHWj5KJNJCKdARKOCwZUen84I5BreWoLqRLANH1U87eJy1tiASPtMnGqJJq0ZsLoRPOw=="],
 

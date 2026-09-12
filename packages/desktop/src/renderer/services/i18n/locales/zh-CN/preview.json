@@ -122,7 +122,15 @@
     "title": "PDF 文档",
     "pathMissing": "PDF 文件路径为空",
     "loadFailed": "加载 PDF 失败",
-    "unableDisplay": "无法加载 PDF 文件"
+    "unableDisplay": "无法加载 PDF 文件",
+    "previousPage": "上一页",
+    "nextPage": "下一页",
+    "fitWidth": "适合宽度",
+    "errors": {
+      "password": "暂不支持预览受密码保护的 PDF",
+      "invalid": "PDF 文件已损坏或格式无效",
+      "missing": "PDF 文件已不存在"
+    }
   },
   "html": {
     "elementSelected": "已选中元素: {{path}}",
@@ -147,10 +155,19 @@
     "installHint": "请从官方 iOfficeAI/OfficeCLI releases 页面安装 OfficeCLI"
   },
   "browser": {
+    "control": {
+      "userTakeover": "你已接管控制，Agent 写操作已暂停。",
+      "challengeRequired": "网站验证需要你处理。请在此标签页完成后恢复 Agent。",
+      "rateLimited": "网站正在限制请求频率，Agent 操作暂停至 {{retryAt}}。",
+      "authenticationRequired": "请在此标签页登录，然后恢复 Agent 控制。",
+      "accessDenied": "网站拒绝访问，请检查账号权限后再恢复。",
+      "resume": "恢复 Agent"
+    },
+    "navigationFailed": "无法加载此网页",
     "newTab": "新建标签页",
     "addressPlaceholder": "输入网址或搜索内容",
     "agentActiveTooltip": "Agent 正在操作此标签页",
-    "tabLimitReached": "标签页数量已达上限（{{count}} 个），已复用最早打开的标签页。",
+    "tabLimitReached": "标签页数量已达上限（{{count}} 个），请先关闭一个标签页。",
     "agentFirstUseTitle": "Agent 正在使用应用内浏览器",
     "agentFirstUseContent": "它可以在这个面板里打开网页、点击和读取内容。你的登录状态会被保留。",
     "agentFirstUseAction": "前往设置"

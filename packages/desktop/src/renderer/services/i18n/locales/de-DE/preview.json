@@ -122,7 +122,15 @@
     "title": "PDF-Dokument",
     "pathMissing": "PDF-Dateipfad fehlt",
     "loadFailed": "PDF-Dokument konnte nicht geladen werden",
-    "unableDisplay": "PDF-Datei kann nicht angezeigt werden"
+    "unableDisplay": "PDF-Datei kann nicht angezeigt werden",
+    "previousPage": "Vorherige Seite",
+    "nextPage": "Nächste Seite",
+    "fitWidth": "An Breite anpassen",
+    "errors": {
+      "password": "Passwortgeschützte PDFs werden noch nicht unterstützt",
+      "invalid": "Diese PDF-Datei ist beschädigt oder ungültig",
+      "missing": "Die PDF-Datei ist nicht mehr vorhanden"
+    }
   },
   "html": {
     "elementSelected": "Ausgewähltes Element: {{path}}",
@@ -147,10 +155,19 @@
     "installHint": "Installiere OfficeCLI über die offizielle iOfficeAI/OfficeCLI releases-Seite"
   },
   "browser": {
+    "control": {
+      "userTakeover": "You took control. Agent write actions are paused.",
+      "challengeRequired": "Site verification requires your input. Complete it in this tab, then resume.",
+      "rateLimited": "This site is rate limiting requests. Agent actions are paused until {{retryAt}}.",
+      "authenticationRequired": "Sign in in this tab, then resume Agent control.",
+      "accessDenied": "The site denied access. Check your account permissions before resuming.",
+      "resume": "Resume Agent"
+    },
+    "navigationFailed": "Diese Seite konnte nicht geladen werden",
     "newTab": "Neuer Tab",
     "addressPlaceholder": "URL eingeben oder suchen",
     "agentActiveTooltip": "Der Agent bedient diesen Tab",
-    "tabLimitReached": "Tab-Limit erreicht ({{count}}). Der älteste Tab wurde wiederverwendet.",
+    "tabLimitReached": "Tab-Limit erreicht ({{count}}). Schließen Sie zuerst einen Tab.",
     "agentFirstUseTitle": "Der Agent nutzt den integrierten Browser",
     "agentFirstUseContent": "Er kann in diesem Bereich Seiten öffnen, klicken und Inhalte lesen. Deine Anmeldung bleibt erhalten.",
     "agentFirstUseAction": "Einstellungen öffnen"

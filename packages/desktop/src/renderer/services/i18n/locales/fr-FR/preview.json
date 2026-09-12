@@ -122,7 +122,15 @@
     "title": "Document PDF",
     "pathMissing": "Chemin du fichier PDF manquant",
     "loadFailed": "Échec du chargement du document PDF",
-    "unableDisplay": "Impossible d'afficher le fichier PDF"
+    "unableDisplay": "Impossible d'afficher le fichier PDF",
+    "previousPage": "Page précédente",
+    "nextPage": "Page suivante",
+    "fitWidth": "Ajuster à la largeur",
+    "errors": {
+      "password": "Les PDF protégés par mot de passe ne sont pas encore pris en charge",
+      "invalid": "Ce PDF est endommagé ou non valide",
+      "missing": "Le fichier PDF n'existe plus"
+    }
   },
   "html": {
     "elementSelected": "Élément sélectionné : {{path}}",
@@ -147,10 +155,19 @@
     "installHint": "Assurez-vous qu'officecli est installé : npm run postinstall"
   },
   "browser": {
+    "control": {
+      "userTakeover": "You took control. Agent write actions are paused.",
+      "challengeRequired": "Site verification requires your input. Complete it in this tab, then resume.",
+      "rateLimited": "This site is rate limiting requests. Agent actions are paused until {{retryAt}}.",
+      "authenticationRequired": "Sign in in this tab, then resume Agent control.",
+      "accessDenied": "The site denied access. Check your account permissions before resuming.",
+      "resume": "Resume Agent"
+    },
+    "navigationFailed": "Impossible de charger cette page",
     "newTab": "Nouvel onglet",
     "addressPlaceholder": "Saisissez une URL ou recherchez",
     "agentActiveTooltip": "L'agent utilise cet onglet",
-    "tabLimitReached": "Limite d'onglets atteinte ({{count}}). L'onglet le plus ancien a été réutilisé.",
+    "tabLimitReached": "Limite d'onglets atteinte ({{count}}). Fermez un onglet avant d'en ouvrir un autre.",
     "agentFirstUseTitle": "L'agent utilise le navigateur intégré",
     "agentFirstUseContent": "Il peut ouvrir des pages, cliquer et lire du contenu dans ce panneau. Votre connexion est conservée.",
     "agentFirstUseAction": "Ouvrir les paramètres"

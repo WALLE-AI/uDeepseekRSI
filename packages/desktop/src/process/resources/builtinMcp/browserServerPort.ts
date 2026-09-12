@@ -52,58 +52,59 @@ export const resolveBrowserUrl = (deps: ResolveBrowserUrlDeps): string | null =>
 };
 
 /**
- * 单目标 CDP 通道的访问口令。
+ * 私有 CDP 通道的访问口令。
  *
- * 口令由主进程随机生成后写进 env，顺着进程继承链传到这里。它的作用是**阻止盲连**：
- * 没读过发现段、不带口令的连接一律被通道 403 掉。
+ * 口令由主进程随机生成，经子进程环境传给内置 launcher。HTTP discovery 只返回不可直接
+ * 连接的无口令地址；launcher 直接构造带口令的 WebSocket 地址。缺少端口或口令时必须退出，
+ * 不能回退为启动用户不可见的独立 Chrome。
  *
- * 但它**不是身份证明** —— HTTP 发现段不鉴权且响应里就带着口令，同机同用户的任意进程
- * 一个 GET 就能取回来（详见 cdpBridge.ts 里的威胁模型说明）。所以这里要求 env 里有口令，
- * 真正的意义是「通道确实起来了」的凭证：缺了就说明桥没起（或 CDP 被关掉了），此时必须
- * 退出，而不是让 MCP 回退去开一个用户看不见的独立 Chrome。
- *
- * Access token for the single-target CDP bridge. The main process generates it randomly and
- * writes it into the env, from where it travels down the process inheritance chain. Its job is
- * to **prevent blind connections**: anything connecting without it (i.e. without having read
- * discovery) is refused with a 403.
- *
- * It is **not proof of identity** — HTTP discovery is unauthenticated and its response embeds
- * the token, so any process running as the same user can fetch it with one GET (see the threat
- * model note in cdpBridge.ts). Requiring it here really means "the bridge is up": its absence
- * means there is no bridge (or CDP is switched off), and we must exit rather than let the MCP
- * fall back to spawning a separate Chrome the user cannot see.
+ * The main process generates this token and passes it only through the child-process environment.
+ * HTTP discovery returns an unusable token-free URL; the bundled launcher builds the authenticated
+ * WebSocket endpoint directly. Missing credentials must terminate startup rather than launch a
+ * separate hidden Chrome.
  */
 export const resolveBridgeToken = (deps: ResolveBrowserUrlDeps): string | null => {
   const raw = deps.env.AIONUI_CDP_BRIDGE_TOKEN?.trim();
   return raw ? raw : null;
 };
 
-/**
- * 决定用什么命令行拉起 chrome-devtools-mcp。
- *
- * 抽到这里只为可测：browserServer.ts 顶层就 spawn，单测没法 import 它，于是 Windows
- * 那条分支以前完全没有测试覆盖 —— 这正是 issue #3883 能溜过去的原因。
- *
- * Windows 上 npx 是 npx.cmd，批处理文件没有终端无法自己执行，直接 spawn 会抛 EINVAL
- * （CVE-2024-27980 之后 Node 收紧了 .cmd 处理）。这里走 cmd.exe /c 而不是 shell: true，
- * 理由见 browserServer.ts 里的详细说明（DEP0190 + browserUrl 会被 shell 解析）。
- *
- * Decides the command line used to launch chrome-devtools-mcp. Extracted purely for
- * testability: browserServer.ts spawns at module scope so tests cannot import it, which left
- * the Windows branch with no coverage at all — the reason issue #3883 slipped through.
- *
- * On Windows npx is npx.cmd, a batch file that cannot execute without a terminal, so spawning
- * it directly throws EINVAL (Node tightened .cmd handling after CVE-2024-27980). We route
- * through cmd.exe /c rather than shell: true; see browserServer.ts for the full rationale
- * (DEP0190, plus browserUrl would be parsed by the shell).
- */
+/** Build the authenticated direct WebSocket endpoint used by the bundled MCP runtime. */
+export const resolveBrowserWsEndpoint = (deps: ResolveBrowserUrlDeps): string | null => {
+  const browserUrl = resolveBrowserUrl(deps);
+  const token = resolveBridgeToken(deps);
+  if (!browserUrl || !token) return null;
+  const url = new URL(browserUrl);
+  url.protocol = 'ws:';
+  url.pathname = '/aionui-cdp';
+  url.searchParams.set('token', token);
+  return url.toString();
+};
+
+/** Build the local runtime argv. No package manager or shell participates at launch. */
 export const buildMcpSpawnCommand = (deps: {
   platform: string;
-  version: string;
-  browserUrl: string;
+  runtimeExecutable: string;
+  runtimeEntry: string;
+  wsEndpoint: string;
 }): { command: string; args: string[]; windowsHide: boolean } => {
-  const mcpArgs = ['-y', `chrome-devtools-mcp@${deps.version}`, '--browser-url', deps.browserUrl];
-  return deps.platform === 'win32'
-    ? { command: 'cmd.exe', args: ['/c', 'npx', ...mcpArgs], windowsHide: true }
-    : { command: 'npx', args: mcpArgs, windowsHide: false };
+  return {
+    command: deps.runtimeExecutable,
+    args: [
+      deps.runtimeEntry,
+      '--ws-endpoint',
+      deps.wsEndpoint,
+      '--page-id-routing',
+      '--no-usage-statistics',
+      '--no-performance-crux',
+      '--no-javascript-evaluation',
+      '--redact-network-headers',
+      '--screenshot-format',
+      'webp',
+      '--screenshot-max-width',
+      '1600',
+      '--screenshot-max-height',
+      '1200',
+    ],
+    windowsHide: deps.platform === 'win32',
+  };
 };

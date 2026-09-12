@@ -122,7 +122,15 @@
     "title": "سند PDF",
     "pathMissing": "مسیر فایل PDF وجود ندارد",
     "loadFailed": "بارگذاری سند PDF ناموفق بود",
-    "unableDisplay": "نمایش فایل PDF ممکن نیست"
+    "unableDisplay": "نمایش فایل PDF ممکن نیست",
+    "previousPage": "صفحه قبل",
+    "nextPage": "صفحه بعد",
+    "fitWidth": "تطبیق با عرض",
+    "errors": {
+      "password": "PDFهای دارای گذرواژه هنوز پشتیبانی نمی‌شوند",
+      "invalid": "این PDF خراب یا نامعتبر است",
+      "missing": "فایل PDF دیگر وجود ندارد"
+    }
   },
   "html": {
     "elementSelected": "عنصر انتخاب‌شده: {{path}}",
@@ -147,10 +155,19 @@
     "installHint": "OfficeCLI را از صفحه انتشارات رسمی iOfficeAI/OfficeCli نصب کنید"
   },
   "browser": {
+    "control": {
+      "userTakeover": "You took control. Agent write actions are paused.",
+      "challengeRequired": "Site verification requires your input. Complete it in this tab, then resume.",
+      "rateLimited": "This site is rate limiting requests. Agent actions are paused until {{retryAt}}.",
+      "authenticationRequired": "Sign in in this tab, then resume Agent control.",
+      "accessDenied": "The site denied access. Check your account permissions before resuming.",
+      "resume": "Resume Agent"
+    },
+    "navigationFailed": "این صفحه بارگذاری نشد",
     "newTab": "زبانه جدید",
     "addressPlaceholder": "نشانی اینترنتی را وارد کنید یا جست‌وجو کنید",
     "agentActiveTooltip": "عامل در حال کار با این زبانه است",
-    "tabLimitReached": "به سقف تعداد زبانه‌ها ({{count}}) رسیدید. قدیمی‌ترین زبانه دوباره استفاده شد.",
+    "tabLimitReached": "به سقف تعداد زبانه‌ها ({{count}}) رسیدید. پیش از باز کردن زبانه جدید، یک زبانه را ببندید.",
     "agentFirstUseTitle": "عامل از مرورگر درون‌برنامه استفاده می‌کند",
     "agentFirstUseContent": "می‌تواند در این پنل صفحه باز کند، کلیک کند و محتوا را بخواند. وضعیت ورود شما حفظ می‌شود.",
     "agentFirstUseAction": "باز کردن تنظیمات"

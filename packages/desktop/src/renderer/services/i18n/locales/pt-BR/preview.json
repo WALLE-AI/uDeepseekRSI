@@ -122,7 +122,15 @@
     "title": "Documento PDF",
     "pathMissing": "O caminho do arquivo PDF está ausente",
     "loadFailed": "Falha ao carregar o documento PDF",
-    "unableDisplay": "Não é possível exibir o arquivo PDF"
+    "unableDisplay": "Não é possível exibir o arquivo PDF",
+    "previousPage": "Página anterior",
+    "nextPage": "Próxima página",
+    "fitWidth": "Ajustar à largura",
+    "errors": {
+      "password": "PDFs protegidos por senha ainda não são compatíveis",
+      "invalid": "Este PDF está danificado ou é inválido",
+      "missing": "O arquivo PDF não existe mais"
+    }
   },
   "html": {
     "elementSelected": "Elemento selecionado: {{path}}",
@@ -147,10 +155,19 @@
     "installHint": "Instale o OfficeCLI pela página oficial de releases iOfficeAI/OfficeCLI"
   },
   "browser": {
+    "control": {
+      "userTakeover": "You took control. Agent write actions are paused.",
+      "challengeRequired": "Site verification requires your input. Complete it in this tab, then resume.",
+      "rateLimited": "This site is rate limiting requests. Agent actions are paused until {{retryAt}}.",
+      "authenticationRequired": "Sign in in this tab, then resume Agent control.",
+      "accessDenied": "The site denied access. Check your account permissions before resuming.",
+      "resume": "Resume Agent"
+    },
+    "navigationFailed": "Não foi possível carregar esta página",
     "newTab": "Nova aba",
     "addressPlaceholder": "Digite uma URL ou pesquise",
     "agentActiveTooltip": "O agente está operando esta aba",
-    "tabLimitReached": "Limite de abas atingido ({{count}}). A aba mais antiga foi reutilizada.",
+    "tabLimitReached": "Limite de abas atingido ({{count}}). Feche uma aba antes de abrir outra.",
     "agentFirstUseTitle": "O agente está usando o navegador interno",
     "agentFirstUseContent": "Ele pode abrir páginas, clicar e ler conteúdo neste painel. Seu login é preservado.",
     "agentFirstUseAction": "Abrir configurações"

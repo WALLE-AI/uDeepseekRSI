@@ -11,6 +11,10 @@
 import { describe, expect, it } from 'vitest';
 
 import { buildPdfSrc, buildStreamUrl } from '@/renderer/pages/conversation/Preview/previewUrls';
+import {
+  buildPdfDocumentSource,
+  describePdfError,
+} from '@/renderer/pages/conversation/Preview/components/viewers/PDFViewer/pdfDocumentSource';
 
 describe('buildStreamUrl', () => {
   it('project ref → kind + pe_id + relative_path (no path)', () => {
@@ -55,5 +59,39 @@ describe('buildPdfSrc', () => {
   it('falls back to inline content when no fileRef', () => {
     expect(buildPdfSrc(undefined, 'blob:abc')).toBe('blob:abc');
     expect(buildPdfSrc(undefined, undefined)).toBe('');
+  });
+});
+
+describe('buildPdfDocumentSource', () => {
+  it('keeps the backend token in request headers instead of the stream URL', () => {
+    window.__backendToken = 'secret-token';
+
+    const source = buildPdfDocumentSource({ kind: 'project', pe_id: 'p1', relative_path: 'docs/a.pdf' });
+
+    expect(source).toMatchObject({
+      httpHeaders: { 'X-AionUI-Backend-Token': 'secret-token' },
+      withCredentials: true,
+    });
+    expect(source && typeof source !== 'string' ? source.url : '').not.toContain('secret-token');
+    window.__backendToken = '';
+  });
+
+  it('preserves an inline blob source when no file reference exists', () => {
+    expect(buildPdfDocumentSource(undefined, 'blob:pdf')).toBe('blob:pdf');
+    expect(buildPdfDocumentSource()).toBeNull();
+  });
+});
+
+describe('describePdfError', () => {
+  it('maps actionable PDF.js failures without exposing their raw message', () => {
+    expect(describePdfError(Object.assign(new Error('password required'), { name: 'PasswordException' }))).toBe(
+      'password'
+    );
+    expect(describePdfError(Object.assign(new Error('bad file'), { name: 'InvalidPDFException' }))).toBe('invalid');
+    expect(describePdfError(new Error('request failed with 404'))).toBe('missing');
+  });
+
+  it('uses a generic category for an unexpected failure', () => {
+    expect(describePdfError(new Error('network reset'))).toBe('unknown');
   });
 });

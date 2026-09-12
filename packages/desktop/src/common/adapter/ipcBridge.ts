@@ -642,12 +642,16 @@ export interface ICdpStatus {
   startupEnabled: boolean;
   configEnabled: boolean;
   isDevMode: boolean;
+  health: 'disabled' | 'ready' | 'noTarget';
+  targetCount: number;
 }
 
 export interface ICdpConfig {
   enabled?: boolean;
   port?: number;
 }
+
+export type IManagedBrowserCredential = { id: string; origin: string; clientId: string };
 
 export type RuntimeStatusScopeKind = 'conversation' | 'mcp' | 'custom_agent';
 export type RuntimeResourceKind = 'node' | 'acp_tool';
@@ -766,8 +770,32 @@ export const application = {
    * in-app browser. Main validates getType() === 'webview', so even a misused call cannot
    * attach to the main window.
    */
-  reportBrowserWebContentsId: bridge.buildProvider<IBridgeResponse<void>, { webContentsId: number }>(
-    'app.report-browser-webcontents-id'
+  reportBrowserWebContentsId: bridge.buildProvider<
+    IBridgeResponse<{ targetId: string }>,
+    {
+      tabId: string;
+      webContentsId: number;
+      scopeId: string;
+      title: string;
+      url: string;
+      active: boolean;
+      requestId?: string;
+    }
+  >('app.report-browser-webcontents-id'),
+  detachBrowserWebContentsId: bridge.buildProvider<IBridgeResponse<void>, { webContentsId: number }>(
+    'app.detach-browser-webcontents-id'
+  ),
+  pauseBrowserTarget: bridge.buildProvider<IBridgeResponse<void>, { tabId: string }>('app.pause-browser-target'),
+  resumeBrowserTarget: bridge.buildProvider<IBridgeResponse<void>, { tabId: string }>('app.resume-browser-target'),
+  listManagedBrowserCredentials: bridge.buildProvider<IBridgeResponse<IManagedBrowserCredential[]>, void>(
+    'app.list-managed-browser-credentials'
+  ),
+  saveManagedBrowserCredential: bridge.buildProvider<
+    IBridgeResponse<{ id: string }>,
+    { id?: string; origin: string; clientId: string; clientSecret: string }
+  >('app.save-managed-browser-credential'),
+  removeManagedBrowserCredential: bridge.buildProvider<IBridgeResponse<void>, { id: string }>(
+    'app.remove-managed-browser-credential'
   ),
   getStartOnBootStatus: bridge.buildProvider<IBridgeResponse<IStartOnBootStatus>, void>('app.get-start-on-boot-status'),
   setStartOnBoot: bridge.buildProvider<IBridgeResponse<IStartOnBootStatus>, { enabled: boolean }>(
@@ -1504,8 +1532,23 @@ export const preview = {
     metadata?: {
       title?: string;
       file_name?: string;
+      browserControlRequestId?: string;
     };
   }>('preview.open-local'),
+  browserControlLocal: bridge.buildEmitter<
+    { action: 'activate'; tabId: string; requestId: string } | { action: 'close'; tabId: string; requestId: string }
+  >('preview.browser-control-local'),
+  browserControlStateLocal: bridge.buildEmitter<{
+    tabId: string;
+    targetId: string;
+    state: 'ready' | 'userTakeover' | 'challengeRequired' | 'rateLimited' | 'authenticationRequired' | 'accessDenied';
+    retryAt?: number | null;
+  }>('preview.browser-control-state-local'),
+  browserControlActivityLocal: bridge.buildEmitter<{
+    tabId: string;
+    targetId: string;
+    active: boolean;
+  }>('preview.browser-control-activity-local'),
 };
 
 // ---------------------------------------------------------------------------

@@ -12,6 +12,8 @@
  */
 
 const esbuild = require('esbuild');
+const crypto = require('crypto');
+const fs = require('fs');
 const path = require('path');
 
 const ROOT = path.resolve(__dirname, '..');
@@ -38,6 +40,37 @@ async function main() {
       outfile: path.join(ROOT, 'out/main/builtin-mcp-browser.js'),
     }),
   ]);
+
+  const runtimeSource = path.join(ROOT, 'node_modules/chrome-devtools-mcp/build/src');
+  const runtimeDestination = path.join(ROOT, 'out/main/chrome-devtools-mcp');
+  fs.rmSync(runtimeDestination, { recursive: true, force: true });
+  fs.cpSync(runtimeSource, runtimeDestination, {
+    recursive: true,
+    filter: (source) => !source.endsWith('.map'),
+  });
+  fs.copyFileSync(
+    path.join(ROOT, 'node_modules/chrome-devtools-mcp/package.json'),
+    path.join(runtimeDestination, 'package.json')
+  );
+  const runtimePackage = JSON.parse(
+    fs.readFileSync(path.join(ROOT, 'node_modules/chrome-devtools-mcp/package.json'), 'utf8')
+  );
+  const runtimeEntry = path.join(runtimeDestination, 'bin', 'chrome-devtools-mcp.js');
+  const fileCount = fs
+    .readdirSync(runtimeDestination, { recursive: true, withFileTypes: true })
+    .filter((entry) => entry.isFile()).length;
+  fs.writeFileSync(
+    path.join(runtimeDestination, 'runtime-manifest.json'),
+    `${JSON.stringify(
+      {
+        version: runtimePackage.version,
+        entrySha256: crypto.createHash('sha256').update(fs.readFileSync(runtimeEntry)).digest('hex'),
+        fileCount,
+      },
+      null,
+      2
+    )}\n`
+  );
 }
 
 main().catch((err) => {

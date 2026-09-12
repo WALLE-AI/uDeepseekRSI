@@ -5,6 +5,11 @@
  */
 
 import React, { useCallback } from 'react';
+import { Button } from '@arco-design/web-react';
+import { Refresh } from '@icon-park/react';
+import { ipcBridge } from '@/common';
+import { useTranslation } from 'react-i18next';
+import type { BrowserControlState } from '../context/PreviewContext';
 import WebviewHost from '@/renderer/components/media/WebviewHost';
 import {
   BROWSER_BLANK_URL,
@@ -20,6 +25,10 @@ export interface BrowserViewerProps {
   tabId: string;
   /** Whether this tab is currently visible and should receive agent commands. */
   active: boolean;
+  /** Correlation id supplied by CDP Target.createTarget. */
+  browserControlRequestId?: string;
+  browserControlState?: BrowserControlState;
+  browserControlRetryAt?: number | null;
   /** Changes when a workspace file update should reload this tab. */
   reloadKey?: number;
   /** 地址变化时回写 tab（用于持久化）/ Persist the new address back onto the tab */
@@ -47,11 +56,15 @@ const BrowserViewer: React.FC<BrowserViewerProps> = ({
   url,
   tabId,
   active,
+  browserControlRequestId,
+  browserControlState = 'ready',
+  browserControlRetryAt,
   reloadKey,
   onUrlChange,
   onTitleChange,
   onFaviconChange,
 }) => {
+  const { t } = useTranslation();
   const handleUrlChange = useCallback((next: string) => onUrlChange(tabId, next), [tabId, onUrlChange]);
 
   const handleTitleChange = useCallback(
@@ -77,21 +90,44 @@ const BrowserViewer: React.FC<BrowserViewerProps> = ({
     if (url === BROWSER_BLANK_URL) onTitleChange(tabId, browserTabLabelFromUrl(url));
   }, [url, tabId, onTitleChange]);
 
+  const resumeAgent = useCallback(() => {
+    void ipcBridge.application.resumeBrowserTarget.invoke({ tabId });
+  }, [tabId]);
+
+  const controlMessage =
+    browserControlState === 'ready'
+      ? null
+      : t(`preview.browser.control.${browserControlState}`, {
+          retryAt: browserControlRetryAt ? new Date(browserControlRetryAt).toLocaleTimeString() : '',
+        });
+
   return (
-    <WebviewHost
-      url={url || BROWSER_BLANK_URL}
-      partition={BROWSER_SESSION_PARTITION}
-      agentBrowserControl
-      agentBrowserControlActive={active}
-      showNavBar
-      className='bg-bg-1'
-      resolveUrlInput={resolveAddressBarInput}
-      onUrlChange={handleUrlChange}
-      onTitleChange={handleTitleChange}
-      onFaviconChange={handleFaviconChange}
-      onDidFinishLoad={handleDidFinishLoad}
-      reloadKey={reloadKey}
-    />
+    <div className='h-full min-h-0 flex flex-col'>
+      {controlMessage && (
+        <div className='min-h-36px flex items-center justify-between gap-12px px-12px bg-fill-2 text-13px text-t-primary'>
+          <span>{controlMessage}</span>
+          <Button size='mini' icon={<Refresh />} onClick={resumeAgent}>
+            {t('preview.browser.control.resume')}
+          </Button>
+        </div>
+      )}
+      <WebviewHost
+        id={tabId}
+        url={url || BROWSER_BLANK_URL}
+        partition={BROWSER_SESSION_PARTITION}
+        agentBrowserControl
+        agentBrowserControlActive={active}
+        agentBrowserControlRequestId={browserControlRequestId}
+        showNavBar
+        className='min-h-0 flex-1 bg-bg-1'
+        resolveUrlInput={resolveAddressBarInput}
+        onUrlChange={handleUrlChange}
+        onTitleChange={handleTitleChange}
+        onFaviconChange={handleFaviconChange}
+        onDidFinishLoad={handleDidFinishLoad}
+        reloadKey={reloadKey}
+      />
+    </div>
   );
 };
 

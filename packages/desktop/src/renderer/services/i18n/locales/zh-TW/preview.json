@@ -122,7 +122,15 @@
     "title": "PDF 文件",
     "pathMissing": "PDF 檔案路徑為空",
     "loadFailed": "載入 PDF 失敗",
-    "unableDisplay": "無法載入 PDF 文件"
+    "unableDisplay": "無法載入 PDF 文件",
+    "previousPage": "上一頁",
+    "nextPage": "下一頁",
+    "fitWidth": "符合寬度",
+    "errors": {
+      "password": "暫不支援預覽受密碼保護的 PDF",
+      "invalid": "PDF 檔案已損毀或格式無效",
+      "missing": "PDF 檔案已不存在"
+    }
   },
   "html": {
     "elementSelected": "已選取元素: {{path}}",
@@ -147,10 +155,19 @@
     "installHint": "請從官方 iOfficeAI/OfficeCLI releases 頁面安裝 OfficeCLI"
   },
   "browser": {
+    "control": {
+      "userTakeover": "You took control. Agent write actions are paused.",
+      "challengeRequired": "Site verification requires your input. Complete it in this tab, then resume.",
+      "rateLimited": "This site is rate limiting requests. Agent actions are paused until {{retryAt}}.",
+      "authenticationRequired": "Sign in in this tab, then resume Agent control.",
+      "accessDenied": "The site denied access. Check your account permissions before resuming.",
+      "resume": "Resume Agent"
+    },
+    "navigationFailed": "無法載入此網頁",
     "newTab": "新增標籤頁",
     "addressPlaceholder": "輸入網址或搜尋內容",
     "agentActiveTooltip": "Agent 正在操作此標籤頁",
-    "tabLimitReached": "標籤頁數量已達上限（{{count}} 個），已重複使用最早開啟的標籤頁。",
+    "tabLimitReached": "標籤頁數量已達上限（{{count}} 個），請先關閉一個標籤頁。",
     "agentFirstUseTitle": "Agent 正在使用應用內瀏覽器",
     "agentFirstUseContent": "它可以在這個面板裡開啟網頁、點擊和讀取內容。你的登入狀態會被保留。",
     "agentFirstUseAction": "前往設定"

@@ -44,6 +44,33 @@ const OPEN_IN_SYSTEM = /Open in system app|使用系统默认应用打开/;
 
 type BackendWindow = Window & { __backendPort?: number };
 
+const createTwoPagePdf = (): Buffer => {
+  const streams = ['BT /F1 24 Tf 72 720 Td (AionUi PDF page 1) Tj ET', 'BT /F1 24 Tf 72 720 Td (Page 2) Tj ET'];
+  const objects = [
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    '<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>',
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 7 0 R >> >> /Contents 5 0 R >>',
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 7 0 R >> >> /Contents 6 0 R >>',
+    `<< /Length ${streams[0].length} >>\nstream\n${streams[0]}\nendstream`,
+    `<< /Length ${streams[1].length} >>\nstream\n${streams[1]}\nendstream`,
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+  ];
+  let pdf = '%PDF-1.4\n';
+  const offsets = [0];
+  objects.forEach((object, index) => {
+    offsets.push(Buffer.byteLength(pdf));
+    pdf += `${index + 1} 0 obj\n${object}\nendobj\n`;
+  });
+  const xrefOffset = Buffer.byteLength(pdf);
+  pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
+  pdf += offsets
+    .slice(1)
+    .map((offset) => `${String(offset).padStart(10, '0')} 00000 n \n`)
+    .join('');
+  pdf += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF\n`;
+  return Buffer.from(pdf);
+};
+
 /**
  * One representative per unsupported branch, because they are not equivalent:
  *
@@ -129,6 +156,7 @@ test.describe('Preview — file type routing', () => {
       fs.writeFileSync(path.join(workspace, file), 'stub');
     }
     fs.writeFileSync(path.join(workspace, 'table.csv'), 'name,qty\nwidget,4\ngadget,7\n');
+    fs.writeFileSync(path.join(workspace, '报告 sample.pdf'), createTwoPagePdf());
   });
 
   test.afterAll(() => {
@@ -186,5 +214,41 @@ test.describe('Preview — file type routing', () => {
 
     // And it must not have landed in the declined branch on the way.
     await expect(page.getByText(UNSUPPORTED_TITLE)).toHaveCount(0);
+  });
+
+  test('PDF.js renders a real two-page PDF with non-empty pixels', async ({ page }) => {
+    test.setTimeout(120_000);
+    await goToGuid(page);
+    conversationId = await createProjectConversation(page, workspace);
+
+    await page.getByText('报告 sample.pdf', { exact: true }).first().click();
+
+    const panel = page.locator(PREVIEW_PANEL);
+    const canvas = panel.locator('canvas').first();
+    await expect(canvas).toBeVisible({ timeout: 30_000 });
+    await expect(panel).toContainText('1 / 2', { timeout: 30_000 });
+    await expect
+      .poll(
+        () =>
+          canvas.evaluate((element) => {
+            const context = (element as HTMLCanvasElement).getContext('2d');
+            if (!context || element.width === 0 || element.height === 0) return false;
+            const pixels = context.getImageData(0, 0, element.width, element.height).data;
+            for (let index = 0; index < pixels.length; index += 4) {
+              if (
+                pixels[index + 3] > 0 &&
+                (pixels[index] < 250 || pixels[index + 1] < 250 || pixels[index + 2] < 250)
+              ) {
+                return true;
+              }
+            }
+            return false;
+          }),
+        { timeout: 30_000 }
+      )
+      .toBe(true);
+
+    await panel.getByTitle(/Next page|下一页|下一頁/).click();
+    await expect(panel).toContainText('2 / 2');
   });
 });

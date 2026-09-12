@@ -61,6 +61,15 @@ export function getBaseUrl(): string {
   return `http://127.0.0.1:${getBackendPort()}`;
 }
 
+/** Return the local backend authentication header without exposing it in URLs. */
+export function getBackendAuthHeaders(): Record<string, string> {
+  const backendToken =
+    typeof window !== 'undefined'
+      ? (window as Window).__backendToken
+      : (globalThis as typeof globalThis & { __backendToken?: string }).__backendToken;
+  return backendToken ? { 'X-AionUI-Backend-Token': backendToken } : {};
+}
+
 function getWsUrl(): string {
   if (isWebUiBrowserMode()) {
     const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -225,11 +234,7 @@ export async function httpRequest<T>(
   options?: HttpRequestOptions
 ): Promise<T> {
   const headers: Record<string, string> = {};
-  const backendToken =
-    typeof window !== 'undefined'
-      ? (window as Window).__backendToken
-      : (globalThis as typeof globalThis & { __backendToken?: string }).__backendToken;
-  if (backendToken) headers['X-AionUI-Backend-Token'] = backendToken;
+  Object.assign(headers, getBackendAuthHeaders());
 
   if (body !== undefined) {
     headers['Content-Type'] = 'application/json';

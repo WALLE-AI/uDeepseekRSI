@@ -6,7 +6,8 @@
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Left, Right, Refresh, Loading } from '@icon-park/react';
+import { Copy, Left, Right, Refresh, Loading } from '@icon-park/react';
+import { Button, Input } from '@arco-design/web-react';
 import { ipcBridge } from '@/common';
 import { InternalNavTracker, shouldResetHistoryForUrlProp } from './webviewHistory';
 
@@ -23,6 +24,8 @@ export interface WebviewHostProps {
   agentBrowserControl?: boolean;
   /** Whether this is the Browser tab currently visible to the user. */
   agentBrowserControlActive?: boolean;
+  /** Correlates a CDP-created tab until its target registration completes. */
+  agentBrowserControlRequestId?: string;
   /** Extra class names for root container */
   className?: string;
   /** Extra styles for root container */
@@ -57,7 +60,7 @@ const MAX_ZOOM_FACTOR = 1.5;
  * Shared webview host component — extracted from URLViewer.
  *
  * Features:
- * - Link/window.open/form interception → internal navigation
+ * - Native page navigation without rewriting links or form submissions
  * - Self-managed history stacks (back / forward)
  * - Loading indicator
  * - Partition support for cache isolation
@@ -65,11 +68,12 @@ const MAX_ZOOM_FACTOR = 1.5;
  */
 const WebviewHost: React.FC<WebviewHostProps> = ({
   url,
-  id: _id,
+  id,
   showNavBar = false,
   partition,
   agentBrowserControl = false,
   agentBrowserControlActive = false,
+  agentBrowserControlRequestId,
   className,
   style,
   onDidFinishLoad,
@@ -97,29 +101,47 @@ const WebviewHost: React.FC<WebviewHostProps> = ({
   }, [reloadKey]);
 
   const reportBrowserWebContents = useCallback((): boolean => {
-    if (!agentBrowserControl || !agentBrowserControlActive) return false;
+    if (!agentBrowserControl || !id) return false;
     const webviewEl = webviewRef.current;
     try {
       const webContentsId = webviewEl?.getWebContentsId?.();
       if (typeof webContentsId !== 'number') return false;
-      if (reportedBrowserWebContentsIdRef.current === webContentsId) return true;
-
       reportedBrowserWebContentsIdRef.current = webContentsId;
-      void ipcBridge.application.reportBrowserWebContentsId.invoke({ webContentsId }).then((res) => {
-        if (!res.success) {
-          reportedBrowserWebContentsIdRef.current = null;
-          if (res.msg) console.warn('[browser] agent control unavailable:', res.msg);
-        }
-      });
+      void ipcBridge.application.reportBrowserWebContentsId
+        .invoke({
+          tabId: id,
+          webContentsId,
+          scopeId: 'preview',
+          title: webviewEl?.getTitle?.() || '',
+          url: webviewEl?.getURL?.() || url,
+          active: agentBrowserControlActive,
+          requestId: agentBrowserControlRequestId,
+        })
+        .then((res) => {
+          if (!res.success) {
+            reportedBrowserWebContentsIdRef.current = null;
+            if (res.msg) console.warn('[browser] agent control unavailable:', res.msg);
+          }
+        });
       return true;
     } catch {
       return false;
     }
-  }, [agentBrowserControl, agentBrowserControlActive]);
+  }, [agentBrowserControl, agentBrowserControlActive, agentBrowserControlRequestId, id, url]);
 
-  useEffect(() => {
-    if (!agentBrowserControlActive) reportedBrowserWebContentsIdRef.current = null;
-  }, [agentBrowserControlActive]);
+  const detachReportedBrowserWebContents = useCallback(() => {
+    const webContentsId = reportedBrowserWebContentsIdRef.current;
+    reportedBrowserWebContentsIdRef.current = null;
+    if (webContentsId === null) return;
+    void ipcBridge.application.detachBrowserWebContentsId.invoke({ webContentsId });
+  }, []);
+
+  const notifyUserTakeover = useCallback(() => {
+    if (!agentBrowserControl || !id) return;
+    void ipcBridge.application.pauseBrowserTarget.invoke({ tabId: id });
+  }, [agentBrowserControl, id]);
+
+  useEffect(() => detachReportedBrowserWebContents, [detachReportedBrowserWebContents]);
 
   // Callbacks are mirrored into refs so the listener effect does not re-subscribe
   // on every parent render (inline arrow props would otherwise churn it).
@@ -136,6 +158,11 @@ const WebviewHost: React.FC<WebviewHostProps> = ({
   const [isLoading, setIsLoading] = useState(true);
   const [zoomFactor, setZoomFactor] = useState(1);
   const [webviewReady, setWebviewReady] = useState(false);
+  const [navigationError, setNavigationError] = useState<{ code: number; description: string } | null>(null);
+
+  const copyCurrentUrl = useCallback(() => {
+    void navigator.clipboard.writeText(currentUrl);
+  }, [currentUrl]);
 
   // 最近由本组件内部触发的导航地址集合。
   //
@@ -238,7 +265,10 @@ const WebviewHost: React.FC<WebviewHostProps> = ({
     const webviewEl = webviewRef.current;
     if (!webviewEl) return;
 
-    const handleStartLoading = () => setIsLoading(true);
+    const handleStartLoading = () => {
+      setIsLoading(true);
+      setNavigationError(null);
+    };
     const handleStopLoading = () => {
       setIsLoading(false);
     };
@@ -252,63 +282,8 @@ const WebviewHost: React.FC<WebviewHostProps> = ({
       setCanGoForward(Boolean(webviewEl.canGoForward?.()));
     };
 
-    // Inject script to intercept links / window.open / form submissions
-    const injectClickInterceptor = () => {
-      webviewEl
-        .executeJavaScript(
-          `
-        (function() {
-          if (window.__webviewHostInjected) return;
-          window.__webviewHostInjected = true;
-
-          document.addEventListener('click', function(e) {
-            let target = e.target;
-            while (target && target.tagName !== 'A') {
-              target = target.parentElement;
-            }
-            if (target && target.tagName === 'A') {
-              const href = target.href;
-              if (href && /^https?:/i.test(href)) {
-                e.preventDefault();
-                e.stopPropagation();
-                window.postMessage({ type: '__WEBVIEW_HOST_NAVIGATE__', url: href }, '*');
-              }
-            }
-          }, true);
-
-          const originalOpen = window.open;
-          window.open = function(url) {
-            if (url && /^https?:/i.test(url)) {
-              window.postMessage({ type: '__WEBVIEW_HOST_NAVIGATE__', url: url }, '*');
-              return null;
-            }
-            return originalOpen.apply(this, arguments);
-          };
-
-          document.addEventListener('submit', function(e) {
-            const form = e.target;
-            if (form && form.action && /^https?:/i.test(form.action)) {
-              e.preventDefault();
-              window.postMessage({ type: '__WEBVIEW_HOST_NAVIGATE__', url: form.action }, '*');
-            }
-          }, true);
-        })();
-        true;
-      `
-        )
-        .catch(() => {});
-    };
-
     const handleConsoleMessage = (event: Electron.ConsoleMessageEvent) => {
       try {
-        if (event.message.includes('__WEBVIEW_HOST_NAVIGATE__')) {
-          const match = event.message.match(/"url":"([^"]+)"/);
-          if (match && match[1]) {
-            navigateToWithHistory(match[1]);
-          }
-          return;
-        }
-
         if (event.message.includes('__AIONUI_WEBVIEW_ZOOM__')) {
           const match = event.message.match(/"deltaY":(-?\d+(\.\d+)?)/);
           if (match && match[1]) {
@@ -343,7 +318,6 @@ const WebviewHost: React.FC<WebviewHostProps> = ({
     const handleDomReady = () => {
       setWebviewReady(true);
       syncNavState();
-      injectClickInterceptor();
 
       /**
        * 把这个 webview 的 webContents id 报给主进程，让单目标 CDP 通道附加到它。
@@ -373,20 +347,6 @@ const WebviewHost: React.FC<WebviewHostProps> = ({
             document.head.appendChild(viewport);
           }
         })();
-        true;
-      `
-        )
-        .catch(() => {});
-
-      // Set up message listener inside webview
-      webviewEl
-        .executeJavaScript(
-          `
-        window.addEventListener('message', function(e) {
-          if (e.data && e.data.type === '__WEBVIEW_HOST_NAVIGATE__') {
-            console.log('__WEBVIEW_HOST_NAVIGATE__', JSON.stringify(e.data));
-          }
-        });
         true;
       `
         )
@@ -454,12 +414,22 @@ const WebviewHost: React.FC<WebviewHostProps> = ({
 
     const handleDidFinishLoad = () => {
       setIsLoading(false);
+      setNavigationError(null);
       onDidFinishLoad?.();
     };
 
     const handleDidFailLoad = (event: any) => {
       setIsLoading(false);
+      if (event.errorCode !== -3) {
+        setNavigationError({ code: event.errorCode, description: event.errorDescription });
+      }
       onDidFailLoad?.(event.errorCode, event.errorDescription);
+    };
+
+    const handleRenderProcessGone = () => {
+      setIsLoading(false);
+      setNavigationError({ code: -1, description: 'Renderer process exited' });
+      detachReportedBrowserWebContents();
     };
 
     const handlePageTitleUpdated = (event: Event & { title?: string }) => {
@@ -479,6 +449,7 @@ const WebviewHost: React.FC<WebviewHostProps> = ({
     webviewEl.addEventListener('console-message', handleConsoleMessage as EventListener);
     webviewEl.addEventListener('did-finish-load', handleDidFinishLoad);
     webviewEl.addEventListener('did-fail-load', handleDidFailLoad as EventListener);
+    webviewEl.addEventListener('render-process-gone', handleRenderProcessGone as EventListener);
     webviewEl.addEventListener('page-title-updated', handlePageTitleUpdated as EventListener);
     webviewEl.addEventListener('page-favicon-updated', handlePageFaviconUpdated as EventListener);
 
@@ -491,13 +462,22 @@ const WebviewHost: React.FC<WebviewHostProps> = ({
       webviewEl.removeEventListener('console-message', handleConsoleMessage as EventListener);
       webviewEl.removeEventListener('did-finish-load', handleDidFinishLoad);
       webviewEl.removeEventListener('did-fail-load', handleDidFailLoad as EventListener);
+      webviewEl.removeEventListener('render-process-gone', handleRenderProcessGone as EventListener);
       webviewEl.removeEventListener('page-title-updated', handlePageTitleUpdated as EventListener);
       webviewEl.removeEventListener('page-favicon-updated', handlePageFaviconUpdated as EventListener);
     };
-  }, [navigateToWithHistory, currentUrl, onDidFinishLoad, onDidFailLoad, isStarOfficeUrl, reportBrowserWebContents]);
+  }, [
+    navigateToWithHistory,
+    currentUrl,
+    detachReportedBrowserWebContents,
+    onDidFinishLoad,
+    onDidFailLoad,
+    isStarOfficeUrl,
+    reportBrowserWebContents,
+  ]);
 
   useEffect(() => {
-    if (!agentBrowserControl || !agentBrowserControlActive) return;
+    if (!agentBrowserControl) return;
 
     // about:blank can reach dom-ready before React installs the listener above.
     // Retry getWebContentsId after attachment so the first agent command does not
@@ -639,17 +619,15 @@ const WebviewHost: React.FC<WebviewHostProps> = ({
    * 这个 webview 渲染任意外部网页，所以三个开关都按「不信任页面」来设。
    *
    * contextIsolation=yes 是刻意打开的：Electron 官方建议即使关掉 nodeIntegration 也保持
-   * 隔离，多一层纵深。我们不依赖与页面共享 JS 上下文 —— 注入脚本和宿主之间靠
-   * postMessage → console.log → 'console-message' 事件通信（见 handleConsoleMessage），
-   * 全程在页面世界里，隔离开着照样成立。别为了图方便把它关回 no：那样以后任何
+   * 隔离，多一层纵深。我们不依赖与页面共享 JS 上下文；StarOffice 的缩放脚本只通过
+   * console-message 发送数值事件，隔离开着照样成立。别为了图方便把它关回 no：那样以后任何
    * preload / IPC 暴露都会被不可信页面直接摸到。
    *
    * This webview renders arbitrary external pages, so all three flags assume the page is
    * untrusted. contextIsolation is deliberately on: Electron recommends keeping it even
-   * with nodeIntegration off, for defence in depth. Nothing here needs a shared JS context
-   * with the page — the injected script talks to the host via
-   * postMessage → console.log → the 'console-message' event (see handleConsoleMessage),
-   * which stays entirely in the page world and works with isolation enabled. Do not flip
+   * with nodeIntegration off, for defence in depth. Nothing here needs a shared JS context;
+   * the StarOffice zoom helper only sends numeric events through `console-message`, which
+   * works with isolation enabled. Do not flip
    * this back to `no` for convenience: any future preload or IPC surface would then be
    * directly reachable by untrusted pages.
    */
@@ -662,7 +640,13 @@ const WebviewHost: React.FC<WebviewHostProps> = ({
   }
 
   return (
-    <div ref={containerRef} className={`h-full w-full flex flex-col ${className ?? ''}`} style={style}>
+    <div
+      ref={containerRef}
+      className={`h-full w-full flex flex-col ${className ?? ''}`}
+      style={style}
+      onPointerDownCapture={notifyUserTakeover}
+      onKeyDownCapture={notifyUserTakeover}
+    >
       {showNavBar && (
         <style>
           {`
@@ -765,45 +749,65 @@ const WebviewHost: React.FC<WebviewHostProps> = ({
       {/* Navigation bar (optional) */}
       {showNavBar && (
         <div className='aion-url-viewer-toolbar flex items-center gap-6px h-40px px-10px bg-bg-2 border-b border-border-1 flex-shrink-0'>
-          <button
+          <Button
             onClick={handleGoBack}
             disabled={!canGoBack}
             className='toolbar-btn icon-btn'
             title={t('common.historyBack')}
-          >
-            <Left theme='outline' size={16} />
-          </button>
-          <button
+            type='text'
+            size='mini'
+            icon={<Left theme='outline' size={16} />}
+          />
+          <Button
             onClick={handleGoForward}
             disabled={!canGoForward}
             className='toolbar-btn icon-btn'
             title={t('common.forward')}
-          >
-            <Right theme='outline' size={16} />
-          </button>
-          <button onClick={handleRefresh} className='toolbar-btn icon-btn' title={t('common.refresh')}>
-            {isLoading ? (
-              <Loading theme='outline' size={16} className='animate-spin' />
-            ) : (
-              <Refresh theme='outline' size={16} />
-            )}
-          </button>
+            type='text'
+            size='mini'
+            icon={<Right theme='outline' size={16} />}
+          />
+          <Button
+            onClick={handleRefresh}
+            className='toolbar-btn icon-btn'
+            title={t('common.refresh')}
+            type='text'
+            size='mini'
+            icon={
+              isLoading ? (
+                <Loading theme='outline' size={16} className='animate-spin' />
+              ) : (
+                <Refresh theme='outline' size={16} />
+              )
+            }
+          />
           {isStarOffice && (
             <div className='flex items-center gap-6px ms-2px'>
-              <button onClick={handleZoomReset} className='toolbar-btn' title='Reset zoom'>
+              <Button
+                onClick={handleZoomReset}
+                className='toolbar-btn'
+                title={t('preview.zoomReset')}
+                type='text'
+                size='mini'
+              >
                 100%
-              </button>
-              <button onClick={handleZoomFit} className='toolbar-btn' title='Fit'>
-                Fit
-              </button>
+              </Button>
+              <Button
+                onClick={handleZoomFit}
+                className='toolbar-btn'
+                title={t('preview.pdf.fitWidth')}
+                type='text'
+                size='mini'
+              >
+                {t('preview.pdf.fitWidth')}
+              </Button>
               <span className='toolbar-chip'>{Math.round(zoomFactor * 100)}%</span>
             </div>
           )}
           <form onSubmit={handleUrlSubmit} className='flex-1 ms-2px'>
-            <input
-              type='text'
+            <Input
               value={inputUrl}
-              onChange={(e) => setInputUrl(e.target.value)}
+              onChange={setInputUrl}
               onKeyDown={handleUrlKeyDown}
               onFocus={(e) => e.target.select()}
               className='toolbar-input'
@@ -827,6 +831,22 @@ const WebviewHost: React.FC<WebviewHostProps> = ({
         style={{ minHeight: 0 }}
         onWheel={handleOuterWheelZoom}
       >
+        {navigationError && (
+          <div className='absolute inset-0 z-20 flex flex-col items-center justify-center gap-12px bg-bg-1 px-24px text-center'>
+            <div className='text-14px text-t-error'>{t('preview.browser.navigationFailed')}</div>
+            <div className='max-w-560px text-12px text-t-secondary break-all'>
+              {navigationError.description} ({navigationError.code})
+            </div>
+            <div className='flex items-center gap-8px'>
+              <Button icon={<Copy />} onClick={copyCurrentUrl}>
+                {t('common.copy')}
+              </Button>
+              <Button type='primary' icon={<Refresh />} onClick={handleRefresh}>
+                {t('common.retry')}
+              </Button>
+            </div>
+          </div>
+        )}
         <webview
           ref={webviewRef as any}
           src={currentUrl}

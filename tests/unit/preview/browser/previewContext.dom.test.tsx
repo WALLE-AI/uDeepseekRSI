@@ -21,7 +21,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const bridgeListeners = vi.hoisted(() => ({
   openLocal: null as null | ((data: { content: string; content_type: 'browser' }) => void),
-  responseStream: null as null | ((message: { type: string; data: unknown }) => void),
+  browserActivity: null as null | ((event: { tabId: string; targetId: string; active: boolean }) => void),
   workspaceChanged: null as null | ((data: { session_id: string; changed_paths: string[] }) => void),
 }));
 
@@ -39,12 +39,10 @@ vi.mock('@/common', () => ({
           return () => (bridgeListeners.openLocal = null);
         },
       },
-    },
-    conversation: {
-      responseStream: {
-        on: (listener: NonNullable<typeof bridgeListeners.responseStream>) => {
-          bridgeListeners.responseStream = listener;
-          return () => (bridgeListeners.responseStream = null);
+      browserControlActivityLocal: {
+        on: (listener: NonNullable<typeof bridgeListeners.browserActivity>) => {
+          bridgeListeners.browserActivity = listener;
+          return () => (bridgeListeners.browserActivity = null);
         },
       },
     },
@@ -72,7 +70,6 @@ import {
   type PreviewContextValue,
 } from '@/renderer/pages/conversation/Preview/context/PreviewContext';
 import { MAX_BROWSER_TABS } from '@/renderer/pages/conversation/Preview/browser/constants';
-import { BUILTIN_BROWSER_MCP_NAME } from '@/renderer/pages/conversation/Preview/browser/agentActivity';
 
 let ctx: PreviewContextValue;
 
@@ -93,7 +90,7 @@ const browserTabs = () => ctx.tabs.filter((tab) => tab.content_type === 'browser
 beforeEach(() => {
   localStorage.clear();
   bridgeListeners.openLocal = null;
-  bridgeListeners.responseStream = null;
+  bridgeListeners.browserActivity = null;
   bridgeListeners.workspaceChanged = null;
   startWorkspacePreview.mockReset().mockResolvedValue({
     session_id: 'preview-session',
@@ -140,22 +137,20 @@ describe('PreviewContext browser tabs', () => {
     expect(browserTabs()).toHaveLength(2);
   });
 
-  it('caps the number of browser tabs and reuses the oldest one', () => {
+  it('caps the number of browser tabs without overwriting an existing tab', () => {
     renderProvider();
     for (let i = 0; i < MAX_BROWSER_TABS; i += 1) {
       act(() => ctx.openBrowserTab(`https://example.com/${i}`));
     }
     expect(browserTabs()).toHaveLength(MAX_BROWSER_TABS);
-    const oldestId = browserTabs()[0].id;
+    const before = browserTabs().map((tab) => ({ id: tab.id, content: tab.content }));
 
     act(() => ctx.openBrowserTab('https://overflow.example.com'));
 
     expect(browserTabs()).toHaveLength(MAX_BROWSER_TABS);
     // 最旧的 tab 被导航到新地址，而不是新增一个
-    // The oldest tab is navigated to the new address rather than a tab being added.
-    expect(browserTabs()[0].id).toBe(oldestId);
-    expect(browserTabs()[0].content).toBe('https://overflow.example.com');
-    expect(ctx.activeTabId).toBe(oldestId);
+    expect(browserTabs().map((tab) => ({ id: tab.id, content: tab.content }))).toEqual(before);
+    expect(browserTabs().some((tab) => tab.content === 'https://overflow.example.com')).toBe(false);
   });
 
   it('surfaces a signal when the cap is hit so the UI can explain the reuse', () => {
@@ -177,25 +172,20 @@ describe('PreviewContext browser tabs', () => {
     expect(ctx.browserTabLimitHitAt).toBeNull();
   });
 
-  it('opens one tab when the CDP target request and browser activity arrive together', () => {
+  it('marks only the target tab active from gateway activity', () => {
     renderProvider();
 
     act(() => {
       bridgeListeners.openLocal?.({ content: 'about:blank', content_type: 'browser' });
-      bridgeListeners.responseStream?.({
-        type: 'acp_tool_call',
-        data: {
-          update: {
-            sessionUpdate: 'tool_call',
-            name: `${BUILTIN_BROWSER_MCP_NAME}__navigate_page`,
-            status: 'in_progress',
-          },
-        },
-      });
     });
+    const first = browserTabs()[0];
+    act(() => ctx.openBrowserTab('https://example.com'));
+    const second = browserTabs()[1];
+    act(() => bridgeListeners.browserActivity?.({ tabId: second.id, targetId: 'target-b', active: true }));
 
-    expect(browserTabs()).toHaveLength(1);
-    expect(browserTabs()[0].metadata?.agentActive).toBe(true);
+    expect(browserTabs()).toHaveLength(2);
+    expect(browserTabs().find((tab) => tab.id === first.id)?.metadata?.agentActive).not.toBe(true);
+    expect(browserTabs().find((tab) => tab.id === second.id)?.metadata?.agentActive).toBe(true);
   });
 
   it('opens, refreshes, and stops a workspace preview session', async () => {

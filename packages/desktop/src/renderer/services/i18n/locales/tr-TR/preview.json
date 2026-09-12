@@ -122,7 +122,15 @@
     "title": "PDF Belgesi",
     "pathMissing": "PDF dosya yolu eksik",
     "loadFailed": "PDF belgesi yüklenemedi",
-    "unableDisplay": "PDF dosyası görüntülenemiyor"
+    "unableDisplay": "PDF dosyası görüntülenemiyor",
+    "previousPage": "Önceki sayfa",
+    "nextPage": "Sonraki sayfa",
+    "fitWidth": "Genişliğe sığdır",
+    "errors": {
+      "password": "Parola korumalı PDF'ler henüz desteklenmiyor",
+      "invalid": "Bu PDF hasarlı veya geçersiz",
+      "missing": "PDF dosyası artık mevcut değil"
+    }
   },
   "html": {
     "elementSelected": "Seçilen öğe: {{path}}",
@@ -147,10 +155,19 @@
     "installHint": "OfficeCLI'yi resmi iOfficeAI/OfficeCLI releases sayfasından yükleyin"
   },
   "browser": {
+    "control": {
+      "userTakeover": "You took control. Agent write actions are paused.",
+      "challengeRequired": "Site verification requires your input. Complete it in this tab, then resume.",
+      "rateLimited": "This site is rate limiting requests. Agent actions are paused until {{retryAt}}.",
+      "authenticationRequired": "Sign in in this tab, then resume Agent control.",
+      "accessDenied": "The site denied access. Check your account permissions before resuming.",
+      "resume": "Resume Agent"
+    },
+    "navigationFailed": "Bu sayfa yüklenemedi",
     "newTab": "Yeni sekme",
     "addressPlaceholder": "Bir URL girin veya arama yapın",
     "agentActiveTooltip": "Aracı bu sekmeyi kullanıyor",
-    "tabLimitReached": "Sekme sınırına ulaşıldı ({{count}}). En eski sekme yeniden kullanıldı.",
+    "tabLimitReached": "Sekme sınırına ulaşıldı ({{count}}). Yeni bir sekme açmadan önce bir sekmeyi kapatın.",
     "agentFirstUseTitle": "Aracı uygulama içi tarayıcıyı kullanıyor",
     "agentFirstUseContent": "Bu panelde sayfa açabilir, tıklayabilir ve içerik okuyabilir. Oturum bilgileriniz korunur.",
     "agentFirstUseAction": "Ayarları aç"

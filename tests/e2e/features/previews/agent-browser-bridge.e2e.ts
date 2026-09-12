@@ -1,5 +1,5 @@
 /**
- * Agent browser control — the single-target CDP bridge.
+ * Agent browser control — the private multi-target CDP gateway.
  *
  * Regression coverage for the vulnerability this bridge replaced. Chromium's
  * `remote-debugging-port` switch is application-wide with no per-target ACL, so enabling
@@ -10,7 +10,7 @@
  * These tests assert the properties that make the replacement safe, against a real running
  * app:
  *   1. Nothing listens on the old application-wide port.
- *   2. The bridge advertises exactly one page target.
+ *   2. The bridge creates and advertises only real Browser-tab targets.
  *   3. The WebSocket refuses a missing, wrong, or prefix-of-correct token.
  *   4. The bridge refuses to attach to the main window.
  *
@@ -26,7 +26,6 @@ import { WebSocket } from 'ws';
 import type { ElectronApplication } from '@playwright/test';
 import { test, expect } from '../../fixtures';
 import { invokeBridge } from '../../helpers/bridge';
-import { SINGLE_TARGET_ID } from '@process/resources/builtinMcp/cdpTargetProtocol';
 
 /** The port Chromium's app-wide switch used to occupy. Must now be dead. */
 const LEGACY_APP_WIDE_PORT = 9230;
@@ -93,7 +92,26 @@ const tryWebSocket = (url: string): Promise<'open' | 'refused'> =>
     setTimeout(() => settle('refused'), 5_000);
   });
 
-test.describe('Agent browser control (single-target CDP bridge)', () => {
+const cdpCommand = <T>(url: string, method: string, params: Record<string, unknown> = {}): Promise<T> =>
+  new Promise((resolve, reject) => {
+    const socket = new WebSocket(url);
+    const timer = setTimeout(() => {
+      socket.close();
+      reject(new Error(`Timed out waiting for ${method}`));
+    }, 10_000);
+    socket.on('open', () => socket.send(JSON.stringify({ id: 1, method, params })));
+    socket.on('message', (data) => {
+      const response = JSON.parse(String(data)) as { id?: number; result?: T; error?: { message?: string } };
+      if (response.id !== 1) return;
+      clearTimeout(timer);
+      socket.close();
+      if (response.error) reject(new Error(response.error.message ?? method));
+      else resolve(response.result as T);
+    });
+    socket.on('error', reject);
+  });
+
+test.describe('Agent browser control (multi-target CDP gateway)', () => {
   test('publishes a bridge port and token to the process tree', async ({ electronApp }) => {
     /**
      * The MCP inherits both and exits without them, so their absence is not cosmetic: it
@@ -183,8 +201,7 @@ test.describe('Agent browser control (single-target CDP bridge)', () => {
      * app-wide switch. A bare reachability check would fail for reasons unrelated to this
      * code, and a name match like /aionui/ cannot tell a *different* AionUi from our own.
      *
-     * The bridge's fixed targetId is the reliable discriminator: it appears only in a
-     * response served by this bridge, and Chromium's own endpoint never mints it.
+     * The old port must not list this app's renderer URL.
      */
     const { port } = await readBridgeEnv(electronApp);
     // Guard against a false pass: if the bridge itself landed on the legacy port, a
@@ -193,9 +210,6 @@ test.describe('Agent browser control (single-target CDP bridge)', () => {
 
     const legacyBody = await httpGetFromTestProcess(LEGACY_APP_WIDE_PORT, '/json/list');
     if (legacyBody === null) return; // Nothing listening at all — the strongest outcome.
-
-    // Something answered, but it must not be this app's bridge or targets.
-    expect(legacyBody).not.toContain(SINGLE_TARGET_ID);
 
     /**
      * And it must not be *our* renderer. Chromium's app-wide endpoint lists targets by URL,
@@ -212,23 +226,26 @@ test.describe('Agent browser control (single-target CDP bridge)', () => {
     }
   });
 
-  test('advertises exactly one page target over discovery', async ({ electronApp }) => {
-    const { port } = await readBridgeEnv(electronApp);
+  test('creates and advertises a real Browser-tab target', async ({ electronApp }) => {
+    const { port, token } = await readBridgeEnv(electronApp);
     expect(port).not.toBeNull();
+    expect(token).toBeTruthy();
+
+    const endpoint = `ws://127.0.0.1:${port}/aionui-cdp?token=${token}`;
+    const created = await cdpCommand<{ targetId: string }>(endpoint, 'Target.createTarget', { url: 'about:blank' });
+    expect(created.targetId).toMatch(/^aionui-browser-/);
 
     const body = await httpGetFromTestProcess(port as number, '/json/list');
     expect(body).not.toBeNull();
 
-    const targets = JSON.parse(body as string) as Array<{ type: string; webSocketDebuggerUrl: string }>;
-    // Exactly one: puppeteer must never be handed a second target to choose from.
-    expect(targets).toHaveLength(1);
-    expect(targets[0].type).toBe('page');
-    /**
-     * Discovery hands back a tokened ws address. That is how the token reaches puppeteer,
-     * which cannot carry a query string on browserURL itself — `new URL(path, base)` drops
-     * it when the path is absolute.
-     */
-    expect(targets[0].webSocketDebuggerUrl).toContain('token=');
+    const targets = JSON.parse(body as string) as Array<{
+      id: string;
+      type: string;
+      webSocketDebuggerUrl: string;
+    }>;
+    const target = targets.find((candidate) => candidate.id === created.targetId);
+    expect(target?.type).toBe('page');
+    expect(target?.webSocketDebuggerUrl).not.toContain('token=');
   });
 
   test('refuses a WebSocket upgrade without a valid token', async ({ electronApp }) => {
@@ -268,13 +285,20 @@ test.describe('Agent browser control (single-target CDP bridge)', () => {
     const result = await invokeBridge<{ success: boolean; msg?: string }>(
       page,
       'app.report-browser-webcontents-id',
-      { webContentsId: mainWindowContentsId },
+      {
+        tabId: 'malicious-main-window',
+        webContentsId: mainWindowContentsId,
+        scopeId: 'test',
+        title: 'main',
+        url: 'about:blank',
+        active: true,
+      },
       10_000
     );
 
     expect(result.success).toBe(false);
     // Assert on the reason so a regression surfaces as a changed message rather than a
     // silently permissive attach.
-    expect(result.msg ?? '').toMatch(/only the in-app browser webview|Refusing to attach/i);
+    expect(result.msg ?? '').toMatch(/only Browser webviews/i);
   });
 });

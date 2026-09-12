@@ -769,6 +769,32 @@ const handleAppReady = async (): Promise<void> => {
             metadata: { title: 'New Tab' },
           });
         },
+        onCreateTarget: ({ requestId, url }) => {
+          ipcBridge.preview.openLocal.emit({
+            content: url || 'about:blank',
+            content_type: 'browser',
+            metadata: { title: 'New Tab', browserControlRequestId: requestId },
+          });
+        },
+        onActivateTarget: ({ tabId, requestId }) => {
+          ipcBridge.preview.browserControlLocal.emit({ action: 'activate', tabId, requestId });
+        },
+        onCloseTarget: ({ tabId, requestId }) => {
+          ipcBridge.preview.browserControlLocal.emit({ action: 'close', tabId, requestId });
+        },
+        onTargetControlStateChanged: (event) => {
+          ipcBridge.preview.browserControlStateLocal.emit(event);
+          if (event.state !== 'ready') {
+            ipcBridge.preview.browserControlLocal.emit({
+              action: 'activate',
+              tabId: event.tabId,
+              requestId: `control-state-${Date.now()}`,
+            });
+          }
+        },
+        onTargetActivityChanged: (event) => {
+          ipcBridge.preview.browserControlActivityLocal.emit(event);
+        },
       });
       setCdpBridgeHandle(bridge);
       /**
