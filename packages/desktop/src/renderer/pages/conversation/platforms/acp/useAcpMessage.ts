@@ -10,7 +10,7 @@ import type { AvailableCommand, TMessage } from '@/common/chat/chatLib';
 import { mapAcpCommandsToSlashCommands } from '@/common/chat/slash/acpMapping';
 import type { SlashCommandItem } from '@/common/chat/slash/types';
 import type { IResponseMessage } from '@/common/adapter/ipcBridge';
-import type { TokenUsageBreakdown, TokenUsageData } from '@/common/config/storage';
+import type { TokenUsageBreakdown, TokenUsageData, TokenUsageSessionCache } from '@/common/config/storage';
 import { useMergeLiveMessage } from '@/renderer/pages/conversation/Messages/hooks';
 import { logStreamTerminalObserved } from '@/renderer/pages/conversation/runtime/useConversationRuntimeView';
 import { getConversationOrNull } from '@/renderer/pages/conversation/utils/conversationCache';
@@ -55,6 +55,16 @@ const BREAKDOWN_KEYS = [
 ] as const;
 
 /**
+ * Session-cumulative cache counters the backend folds into `_meta` (see
+ * `packages/dsh-bridge/src/updateMapper.ts`). Unlike the per-turn `cached_*`
+ * counters above, these span every turn of the session.
+ */
+const SESSION_CACHE_KEYS = {
+  read_tokens: 'session_cached_read_tokens',
+  write_tokens: 'session_cached_write_tokens',
+} as const;
+
+/**
  * Convert an ACP UsageUpdate payload (live acp_context_usage frame or
  * GET /usage snapshot — same shape) into TokenUsageData. Per-turn counters
  * ride under `_meta`; cost is the agent's cumulative session cost.
@@ -78,6 +88,16 @@ export function tokenUsageFromAcpUsage(data: {
     }
     if (Object.keys(breakdown).length > 0) {
       usage.breakdown = breakdown;
+    }
+    const sessionCache: TokenUsageSessionCache = {};
+    for (const [field, metaKey] of Object.entries(SESSION_CACHE_KEYS)) {
+      const value = data._meta[metaKey];
+      if (typeof value === 'number' && value >= 0) {
+        sessionCache[field as keyof TokenUsageSessionCache] = value;
+      }
+    }
+    if (Object.keys(sessionCache).length > 0) {
+      usage.session_cache = sessionCache;
     }
   }
   return usage;
@@ -518,6 +538,7 @@ export const useAcpMessage = (
               // breakdown; keep the last end-of-turn one until replaced.
               if (!next.breakdown && prev?.breakdown) next.breakdown = prev.breakdown;
               if (!next.cost && prev?.cost) next.cost = prev.cost;
+              if (!next.session_cache && prev?.session_cache) next.session_cache = prev.session_cache;
               return next;
             });
             if (usageData.size > 0) {

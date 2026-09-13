@@ -40,7 +40,7 @@ import {
   memberIdFromDelegationTool,
   type ExpertRuntimeProfile,
 } from './experts/runtime';
-import { parseToolCallEnvelope } from './updateMapper';
+import { augmentUsagePayload, parseToolCallEnvelope, parseUsagePayload, projectUsageSnapshot } from './updateMapper';
 import {
   assistantIdForWorkMode,
   DSH_WORK_MODES,
@@ -68,6 +68,8 @@ import type {
   DshMcpServer,
   DshSession,
   DshSessionConfigOption,
+  SessionCacheTotals,
+  UsageSnapshot,
 } from './types';
 import {
   canonicalizeWorkspace,
@@ -107,6 +109,14 @@ type StoredConversation = {
     backend: 'acp';
     current_model_id: string;
     work_mode?: DshWorkMode;
+    /** Latest usage report, so the renderer's context meter survives a reload. */
+    last_token_usage?: UsageSnapshot;
+    /** Agent-reported context window size; absent/0 means unknown, never guessed. */
+    last_context_limit?: number;
+    /** Session-cumulative cache totals accumulated across this session's turns. */
+    session_cache_tokens?: SessionCacheTotals;
+    /** The session the snapshot above describes; a mismatch invalidates it. */
+    last_usage_session_id?: string;
   };
   runtime: RuntimeSummary;
   prompt_capability?: { image: boolean; audio: boolean };
@@ -249,6 +259,15 @@ type ActiveTurn = {
   firstUpdateObserved: boolean;
   firstThoughtObserved: boolean;
   firstTextObserved: boolean;
+  /**
+   * Session-cumulative cache totals this turn accumulates on top of. Resolved on the
+   * turn's first usage frame, not at turn start: `#ensureSession` runs after the turn is
+   * registered and may invalidate the totals, and a baseline read before that would
+   * resurrect them.
+   */
+  cacheBaseline?: SessionCacheTotals;
+  /** Largest per-turn cache counters seen so far this turn. */
+  cacheSeen: SessionCacheTotals;
 };
 type PendingPermission = {
   request: BridgePermissionRequest;
@@ -2108,9 +2127,10 @@ export class DshApiServer {
       return;
     }
     if (update.kind === 'usage') {
+      const sessionCache = this.#recordUsage(update.conversationId, active, payload);
       this.#emit('message.stream', {
         type: 'acp_context_usage',
-        data: payload,
+        data: sessionCache ? augmentUsagePayload(payload, sessionCache) : payload,
         msg_id: active.messageId,
         turn_id: active.turnId,
         conversation_id: update.conversationId,
@@ -2137,6 +2157,45 @@ export class DshApiServer {
         created_at: Date.now(),
       });
     }
+  }
+
+  /**
+   * Mirrors a usage frame onto the conversation so the context meter can be rehydrated
+   * after a conversation switch or an app restart, and folds this turn's cache counters
+   * into the session-cumulative totals.
+   *
+   * Deliberately does not `#persist()`: that serializes the whole state and a turn can
+   * emit many usage frames. The turn-end persist picks these mutations up.
+   *
+   * Returns the session-cumulative cache totals to advertise on the forwarded frame, or
+   * undefined when the payload carried no usable token count.
+   */
+  #recordUsage(conversationId: string, active: ActiveTurn, payload: unknown): SessionCacheTotals | undefined {
+    const parsed = parseUsagePayload(payload);
+    if (!parsed) return undefined;
+    const conversation = this.#state.conversations.find((item) => item.id === conversationId);
+    if (!conversation) return undefined;
+
+    const baseline = (active.cacheBaseline ??= conversation.extra.session_cache_tokens ?? { read: 0, write: 0 });
+    // Take the largest counter seen this turn rather than summing frames: dsh may repeat
+    // or refine a turn's `_meta`, and summing would inflate the session totals.
+    const breakdown = parsed.snapshot.breakdown;
+    active.cacheSeen = {
+      read: Math.max(active.cacheSeen.read, breakdown?.cached_read_tokens ?? 0),
+      write: Math.max(active.cacheSeen.write, breakdown?.cached_write_tokens ?? 0),
+    };
+    const sessionCache: SessionCacheTotals = {
+      read: baseline.read + active.cacheSeen.read,
+      write: baseline.write + active.cacheSeen.write,
+    };
+
+    conversation.extra.last_token_usage = parsed.snapshot;
+    // A window size of 0 means "unknown" — keep the last real one rather than
+    // downgrading the meter to a hollow ring mid-turn.
+    if (parsed.size > 0) conversation.extra.last_context_limit = parsed.size;
+    conversation.extra.session_cache_tokens = sessionCache;
+    conversation.extra.last_usage_session_id = conversation.extra.acp_session_id as string | undefined;
+    return sessionCache;
   }
 
   /**
@@ -2429,6 +2488,17 @@ export class DshApiServer {
     });
     conversation.session_id = session.sessionId;
     conversation.extra.acp_session_id = session.sessionId;
+    // A different session means the agent's context was rebuilt from scratch, so the
+    // persisted meter describes a window that no longer exists. Drop it here — every
+    // path that mints or resumes a session funnels through this method, which is safer
+    // than clearing at each `delete acp_session_id` site. A resume that reuses the same
+    // id keeps its snapshot; one that re-mints loses it and re-fills on the next frame.
+    if (conversation.extra.last_usage_session_id !== session.sessionId) {
+      delete conversation.extra.last_token_usage;
+      delete conversation.extra.last_context_limit;
+      delete conversation.extra.session_cache_tokens;
+      delete conversation.extra.last_usage_session_id;
+    }
     try {
       const options = [
         capabilities.model ? { id: 'model', value: toDshModelValue(this.#providerId, capabilities.model) } : undefined,
@@ -3537,6 +3607,7 @@ export class DshApiServer {
             firstUpdateObserved: false,
             firstThoughtObserved: false,
             firstTextObserved: false,
+            cacheSeen: { read: 0, write: 0 },
           });
           this.#traceTurn(conversationId, 'message_received');
           this.#emit('message.stream', {
@@ -3666,8 +3737,20 @@ export class DshApiServer {
           responseData(response, null);
           return;
         }
-        if (tail === 'usage') {
-          responseData(response, null);
+        if (tail === 'usage' && method === 'GET') {
+          // Null until the agent has reported usage for the current session — the
+          // renderer treats that as "no meter yet" rather than as zero usage.
+          const snapshot = conversation.extra.last_token_usage;
+          responseData(
+            response,
+            snapshot
+              ? projectUsageSnapshot(
+                  snapshot,
+                  conversation.extra.last_context_limit ?? 0,
+                  conversation.extra.session_cache_tokens
+                )
+              : null
+          );
           return;
         }
         if (tail === 'slash-commands' || tail === 'confirmations' || tail === 'artifacts' || tail === 'associated') {

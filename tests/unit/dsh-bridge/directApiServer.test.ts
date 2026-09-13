@@ -12,6 +12,7 @@ import type {
   DshAgentPort,
   OfficeDocumentType,
   OfficePreviewPort,
+  UsageWirePayload,
 } from '../../../packages/dsh-bridge/src';
 
 const cleanups: Array<() => Promise<void>> = [];
@@ -1556,5 +1557,157 @@ describe('direct DeepSeek Harness HTTP backend', () => {
       data: { runtime: { state: string; pending_confirmations: number } };
     };
     expect(completed.data.runtime).toMatchObject({ state: 'idle', pending_confirmations: 0 });
+  });
+
+  /**
+   * Drives turns that report usage, so the snapshot the context meter rehydrates from
+   * can be inspected over HTTP the way the renderer reads it.
+   *
+   * `newSession` hands out a fresh id per call, which is what lets the session-change
+   * invalidation be exercised — the default fake reuses `session-1` forever.
+   */
+  async function createUsageServer() {
+    let emit: ((update: BridgeUpdate) => void) | undefined;
+    let conversationId = '';
+    let framesForNextTurn: Array<Record<string, unknown>> = [];
+    let sessionCounter = 0;
+    const server = await createServer(undefined, undefined, {
+      portOverrides: {
+        newSession: async () => {
+          sessionCounter += 1;
+          return { sessionId: `session-${sessionCounter}`, configOptions: [] };
+        },
+        prompt: async (sessionId) => {
+          framesForNextTurn.forEach((payload, index) => {
+            emit?.({ conversationId, sessionId, sequence: index + 1, kind: 'usage', payload });
+          });
+          return { stopReason: 'end_turn' };
+        },
+      },
+    });
+    const { baseUrl } = server;
+    emit = server.emit;
+    const created = (await (
+      await fetch(`${baseUrl}/api/conversations`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ extra: {} }),
+      })
+    ).json()) as { data: { id: string } };
+    conversationId = created.data.id;
+
+    const usageResponse = async () => fetch(`${baseUrl}/api/conversations/${conversationId}/usage`);
+    const usage = async () => ((await (await usageResponse()).json()) as { data: UsageWirePayload | null }).data;
+
+    return {
+      baseUrl,
+      conversationId,
+      usage,
+      usageResponse,
+      /** Runs one turn that reports the given usage frames, and waits for it to land. */
+      async turn(...frames: Array<Record<string, unknown>>) {
+        framesForNextTurn = frames;
+        await fetch(`${baseUrl}/api/conversations/${conversationId}/messages`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ content: 'hello' }),
+        });
+        // The turn runs detached from the POST, so wait for the snapshot to appear.
+        await vi.waitFor(async () => expect(await usage()).not.toBeNull());
+      },
+    };
+  }
+
+  it('reports no usage snapshot until the agent has reported one', async () => {
+    const { usage } = await createUsageServer();
+    expect(await usage()).toBeNull();
+  });
+
+  it('serves the last reported usage over HTTP in the live frame wire shape', async () => {
+    const { usage, turn } = await createUsageServer();
+
+    await turn({
+      sessionUpdate: 'usage_update',
+      used: 47_500,
+      size: 65_536,
+      cost: { amount: 0.42, currency: 'USD' },
+      _meta: { input_tokens: 12_100, cached_read_tokens: 44_800, cached_write_tokens: 1_200 },
+    });
+
+    expect(await usage()).toEqual({
+      used: 47_500,
+      size: 65_536,
+      cost: { amount: 0.42, currency: 'USD' },
+      _meta: {
+        input_tokens: 12_100,
+        cached_read_tokens: 44_800,
+        cached_write_tokens: 1_200,
+        session_cached_read_tokens: 44_800,
+        session_cached_write_tokens: 1_200,
+      },
+    });
+  });
+
+  it('keeps the last known window size when a later frame reports it as unknown', async () => {
+    const { usage, turn } = await createUsageServer();
+
+    await turn({ used: 47_500, size: 65_536 }, { used: 48_000, size: 0 });
+
+    // A `size` of 0 means "unknown"; downgrading the meter to a hollow ring
+    // mid-turn would be a regression, not honesty.
+    expect(await usage()).toMatchObject({ used: 48_000, size: 65_536 });
+  });
+
+  it('does not double count the cache totals when a turn reports them more than once', async () => {
+    const { usage, turn } = await createUsageServer();
+
+    await turn(
+      { used: 40_000, size: 65_536, _meta: { cached_read_tokens: 44_800 } },
+      // A mid-turn frame with no counters at all, then a refined repeat.
+      { used: 44_000, size: 65_536 },
+      { used: 47_500, size: 65_536, _meta: { cached_read_tokens: 44_800, cached_write_tokens: 1_200 } }
+    );
+
+    expect((await usage())?._meta).toMatchObject({
+      session_cached_read_tokens: 44_800,
+      session_cached_write_tokens: 1_200,
+    });
+  });
+
+  it('accumulates the cache totals across the turns of a session', async () => {
+    const { usage, turn } = await createUsageServer();
+
+    await turn({ used: 47_500, size: 65_536, _meta: { cached_read_tokens: 44_800, cached_write_tokens: 1_200 } });
+    await turn({ used: 52_000, size: 65_536, _meta: { cached_read_tokens: 10_000 } });
+
+    expect(await usage()).toMatchObject({
+      used: 52_000,
+      _meta: {
+        session_cached_read_tokens: 54_800,
+        // The second turn wrote no cache, so the running total stands.
+        session_cached_write_tokens: 1_200,
+      },
+    });
+  });
+
+  it('drops the snapshot when the agent session is rebuilt', async () => {
+    const { baseUrl, conversationId, usage, turn } = await createUsageServer();
+
+    await turn({ used: 47_500, size: 65_536, _meta: { cached_read_tokens: 44_800 } });
+
+    const restarted = await fetch(`${baseUrl}/api/conversations/${conversationId}/runtime/restart`, {
+      method: 'POST',
+    });
+    expect(restarted.status).toBe(200);
+
+    // The new session starts with an empty context, so the persisted 47.5K
+    // describes a window that no longer exists.
+    expect(await usage()).toBeNull();
+  });
+
+  it('does not answer a non-GET on the usage route', async () => {
+    const { baseUrl, conversationId } = await createUsageServer();
+    const response = await fetch(`${baseUrl}/api/conversations/${conversationId}/usage`, { method: 'POST' });
+    expect(response.status).toBe(501);
   });
 });
