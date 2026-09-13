@@ -9,19 +9,19 @@
 
 本文件既保留原始执行方案，也记录本轮实际落地结果。为避免把“安全默认拒绝”误写成“完整确认工作流”，各项按真实状态标记：
 
-| 计划项 | 状态 | 实际结果 |
-| --- | --- | --- |
-| PR 1 PDF 恢复 | 完成 | 使用带后端认证头的 PDF.js 与本地 worker；支持翻页、缩放、适宽、刷新、系统打开和分类错误态 |
-| PR 2 PDF 内存控制 | 等价完成 | 采用单页 canvas 模型而非连续滚动虚拟列表；任意时刻只保留选中页位图并取消过期任务 |
-| PR 3-4 Browser 语义与故障 UI | 完成 | 保留原生链接、POST/form 与 window-open 语义；提供导航失败、重试、复制 URL 和 renderer 崩溃状态 |
-| PR 5-7 稳定多 target | 完成 | Browser tab 与稳定 target 一一对应；支持创建、选择、关闭与后台 target 精确路由；主窗口和其他 partition 拒绝注册 |
-| PR 8 控制协调 | 核心完成 | 每 target 单写租约、不同 target 并行、同 action 结果去重、断线释放、document revision 递增 |
-| PR 9 人工接管 | 核心完成 | 用户指针/键盘输入立即暂停对应 target，UI 显示状态并可恢复；密码、挑战页与认证页进入人工 handoff |
-| PR 10 文件/下载/权限 | 安全基线完成 | Agent 导航及 redirect 拒绝危险 scheme 与显式私网地址；网站权限拒绝；上传、下载目录、dialog、Cookie 写入等原始 CDP 方法默认拒绝，不宣称已具备用户确认型上传/下载工作流 |
-| PR 11 Challenge/Access | 核心完成 | 区分 429、401、普通 403 与 `cf-mitigated: challenge`；按 Origin 限流/熔断；人工完成 Turnstile/MFA；可选 Cloudflare Access Service Token 使用 OS 加密存储并仅对精确 HTTPS Origin 注入 |
-| PR 12 离线分发 | 完成 | 固定并打包 `chrome-devtools-mcp@1.9.0`，启动不经过 npx/网络；构建生成版本、文件数和入口 SHA-256 manifest |
-| PR 13 健康状态 | 部分完成 | 设置页显示 disabled/no-target/ready 与 target 数；未新增持久化动作审计时间线 |
-| PR 14 文档 | 完成 | `docs/guides/cdp.md` 已同步私有网关、人工挑战处理、Access、安全拒绝策略和 PDF.js 行为 |
+| 计划项                       | 状态         | 实际结果                                                                                                                                                                             |
+| ---------------------------- | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| PR 1 PDF 恢复                | 完成         | 使用带后端认证头的 PDF.js 与本地 worker；支持翻页、缩放、适宽、刷新、系统打开和分类错误态                                                                                            |
+| PR 2 PDF 内存控制            | 等价完成     | 采用单页 canvas 模型而非连续滚动虚拟列表；任意时刻只保留选中页位图并取消过期任务                                                                                                     |
+| PR 3-4 Browser 语义与故障 UI | 完成         | 保留原生链接、POST/form 与 window-open 语义；提供导航失败、重试、复制 URL 和 renderer 崩溃状态                                                                                       |
+| PR 5-7 稳定多 target         | 完成         | Browser tab 与稳定 target 一一对应；支持创建、选择、关闭与后台 target 精确路由；主窗口和其他 partition 拒绝注册                                                                      |
+| PR 8 控制协调                | 核心完成     | 每 target 单写租约、不同 target 并行、同 action 结果去重、断线释放、document revision 递增                                                                                           |
+| PR 9 人工接管                | 核心完成     | 用户指针/键盘输入立即暂停对应 target，UI 显示状态并可恢复；密码、挑战页与认证页进入人工 handoff                                                                                      |
+| PR 10 文件/下载/权限         | 安全基线完成 | Agent 导航及 redirect 拒绝危险 scheme 与显式私网地址；网站权限拒绝；上传、下载目录、dialog、Cookie 写入等原始 CDP 方法默认拒绝，不宣称已具备用户确认型上传/下载工作流                |
+| PR 11 Challenge/Access       | 核心完成     | 区分 429、401、普通 403 与 `cf-mitigated: challenge`；按 Origin 限流/熔断；人工完成 Turnstile/MFA；可选 Cloudflare Access Service Token 使用 OS 加密存储并仅对精确 HTTPS Origin 注入 |
+| PR 12 离线分发               | 完成         | 固定并打包 `chrome-devtools-mcp@1.9.0`，启动不经过 npx/网络；构建生成版本、文件数和入口 SHA-256 manifest                                                                             |
+| PR 13 健康状态               | 部分完成     | 设置页显示 disabled/no-target/ready 与 target 数；未新增持久化动作审计时间线                                                                                                         |
+| PR 14 文档                   | 完成         | `docs/guides/cdp.md` 已同步私有网关、人工挑战处理、Access、安全拒绝策略和 PDF.js 行为                                                                                                |
 
 验证结果：严格 TypeScript、i18n 一致性、lint（0 error）、92 个变更相关单测和生产构建通过。完整 Vitest 为 5174 passed / 10 skipped / 2 failed；两项失败位于未改动的 DSH provider 测试，当前环境返回 `aionui-gateway`，测试预期 `deepseek-official`。Electron E2E 在本机进入测试前因 Windows Electron GPU process `-1073741515` 退出，不能据此宣称平台 E2E 已通过。
 

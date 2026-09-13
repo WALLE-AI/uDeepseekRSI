@@ -1,5 +1,16 @@
 # Changelog
 
+## [2.2.4](https://github.com/WALLE-AI/uDeepseekRSI/compare/v2.2.3...v2.2.4) (2026-09-13)
+
+### Desktop
+
+#### Features
+
+- **browser:** prefix browser control identifiers and rework the CDP bridge, credential store, and PDF viewer
+- **experts:** add an expert and experts team library with routing, handoff, and runtime profiles
+
+---
+
 ## [2.2.3](https://github.com/WALLE-AI/uDeepseekRSI/compare/v2.2.2...v2.2.3) (2026-09-09)
 
 ### Desktop

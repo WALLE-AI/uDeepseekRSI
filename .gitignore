@@ -97,6 +97,9 @@ typings/
 # Electron-Forge
 out/
 
+# Local build cache (temp/electron-builder caches redirected off a full C: drive)
+.build-tmp/
+
 # IDE and Editor files
 .idea
 .vscode

@@ -6,12 +6,12 @@
 
 ## 1. 现状：引擎完全不知道「专家」
 
-| 专家属性 | 当前落地方式 | 引擎是否感知 |
-| --- | --- | --- |
-| persona / 方法论 / 输出模板 | 前置拼进首轮用户消息（`DshApiServer.ts:2057-2067`） | ❌ 以为用户第一句话很长 |
-| `ownSkills` 私有技能 | `AIONUI_SKILLS_DIRS_JSON` → `skill-filesystem.customSkillDirs` | ✅ **唯一真集成** |
-| `allowedTools` | persona 里的一句话 | ❌ 声明意图，沙箱仍是模式级 `workspace-write` |
-| 专家团 | 会话创建即拦截 `EXPERT_TYPE_UNSUPPORTED`（`ExpertService.ts:132`） | ❌ 一个字节都没到过引擎 |
+| 专家属性                    | 当前落地方式                                                       | 引擎是否感知                                  |
+| --------------------------- | ------------------------------------------------------------------ | --------------------------------------------- |
+| persona / 方法论 / 输出模板 | 前置拼进首轮用户消息（`DshApiServer.ts:2057-2067`）                | ❌ 以为用户第一句话很长                       |
+| `ownSkills` 私有技能        | `AIONUI_SKILLS_DIRS_JSON` → `skill-filesystem.customSkillDirs`     | ✅ **唯一真集成**                             |
+| `allowedTools`              | persona 里的一句话                                                 | ❌ 声明意图，沙箱仍是模式级 `workspace-write` |
+| 专家团                      | 会话创建即拦截 `EXPERT_TYPE_UNSUPPORTED`（`ExpertService.ts:132`） | ❌ 一个字节都没到过引擎                       |
 
 根因：`AIONUI_DSH_PERSONA` 是**进程级 env**，在 `#createRuntimePool()`（`DshApiServer.ts:801`）为每个工作模式设一次；`DshRuntimePool` 按 `mode` 缓存 bridge，一个办公进程被所有办公会话共享。把专家 persona 写进去会让专家 A 的人设泄漏进专家 B 的会话。
 
@@ -69,13 +69,13 @@ ACP `session/setConfigOption` **不能**用来传专家身份。`dsh-acp` 的类
 
 ## 3. 待解的问题
 
-| # | 问题 | 本质 |
-| --- | --- | --- |
-| P1 | 专家 persona 不是 system prompt | 专家身份无法按会话传进引擎 |
-| P2 | `allowedTools` 不进沙箱 | 同上，且沙箱当前按模式配 |
-| P3 | 专家团无法执行 | 缺委派链路、回合语义、事件投射 |
-| P4 | **无专家会话完全看不见专家库** | 主控不会主动调专家，库只对主动浏览的用户有价值 |
-| P5 | **会话开始后无法挂专家** | `expertId` 创建即冻结，中途改绑无路径 |
+| #   | 问题                            | 本质                                           |
+| --- | ------------------------------- | ---------------------------------------------- |
+| P1  | 专家 persona 不是 system prompt | 专家身份无法按会话传进引擎                     |
+| P2  | `allowedTools` 不进沙箱         | 同上，且沙箱当前按模式配                       |
+| P3  | 专家团无法执行                  | 缺委派链路、回合语义、事件投射                 |
+| P4  | **无专家会话完全看不见专家库**  | 主控不会主动调专家，库只对主动浏览的用户有价值 |
+| P5  | **会话开始后无法挂专家**        | `expertId` 创建即冻结，中途改绑无路径          |
 
 P1 与 P2 同源：**只要专家身份能到达引擎，两者一并解决。**
 
@@ -87,12 +87,12 @@ P4 / P5 是「用户没召唤专家」这条路径上的两个缺口。它不是
 
 ### 4.1 专家身份的传输通道（P1 / P2）
 
-| 方案 | 结论 | 理由 |
-| --- | --- | --- |
-| ACP `setConfigOption` | ❌ 否决 | 标准固定集合，非扩展点（2.4） |
-| `agent-instructions` / AGENTS.md 链 | ❌ 否决 | 需往用户工作区写文件；同工作区多会话互串 |
-| **运行时池按专家分键** | ✅ **采纳** | 今天就能做，零 DSH 插件 |
-| 自研 ACP 插件替换 `acp` | ⏸ 暂缓 | 正解但绑死 DSH 内部实现，等进程数真成瓶颈再做 |
+| 方案                                | 结论        | 理由                                          |
+| ----------------------------------- | ----------- | --------------------------------------------- |
+| ACP `setConfigOption`               | ❌ 否决     | 标准固定集合，非扩展点（2.4）                 |
+| `agent-instructions` / AGENTS.md 链 | ❌ 否决     | 需往用户工作区写文件；同工作区多会话互串      |
+| **运行时池按专家分键**              | ✅ **采纳** | 今天就能做，零 DSH 插件                       |
+| 自研 ACP 插件替换 `acp`             | ⏸ 暂缓      | 正解但绑死 DSH 内部实现，等进程数真成瓶颈再做 |
 
 **采纳方案**：`DshRuntimePool` 按专家分键，且**进程键与 DSH_HOME 路径必须分开取值**：
 
@@ -164,11 +164,11 @@ DSH_HOME    <dshHome>/modes/<mode>/<expertName>        无专家时 <dshHome>/mo
 
 ### 阶段 0 · 消除不确定性（spike，不产出生产代码）
 
-| Spike | 要回答的问题 | 完成标准 |
-| --- | --- | --- |
-| S1 | 子智能体 persona / 工具限制的实际 API 签名 | 派生一个子智能体，带自定义 persona 和收窄的工具集，拿到结果回传 |
-| S2 | `ctx.workflowEngine` 的能力边界 | 判定它能否承载 `owner` + `depends_on` 的任务图，或只能做线性流程 |
-| S3 | 按专家分进程的内存实测 | 3 个专家并发时的常驻内存与冷启动耗时 |
+| Spike | 要回答的问题                               | 完成标准                                                         |
+| ----- | ------------------------------------------ | ---------------------------------------------------------------- |
+| S1    | 子智能体 persona / 工具限制的实际 API 签名 | 派生一个子智能体，带自定义 persona 和收窄的工具集，拿到结果回传  |
+| S2    | `ctx.workflowEngine` 的能力边界            | 判定它能否承载 `owner` + `depends_on` 的任务图，或只能做线性流程 |
+| S3    | 按专家分进程的内存实测                     | 3 个专家并发时的常驻内存与冷启动耗时                             |
 
 S1、S2 决定阶段 3 的形态；S3 决定阶段 2 是否需要更激进的回收策略。**三个 spike 可并行，预计各半天。**
 
@@ -177,11 +177,13 @@ S1、S2 决定阶段 3 的形态；S3 决定阶段 2 是否需要更激进的回
 **为什么排第一**：阶段 2 和 3 都依赖它，而它本身不依赖任何一个。现在一轮以 `session/prompt` 返回 `stopReason` 为终点（`createDshConnection.ts`），主理人说完话时成员可能刚开始干活——沿用会出现「任务仍在跑、界面已收尾」。
 
 **改动点**
+
 - `createDshConnection.ts` / `DshBridge.ts`：`prompt()` 返回后不立即判定回合结束
 - `DshApiServer.#sendPrompt`：引入「是否仍有在途子智能体」的判定后再收流、再写 `status: 'finished'`
 - 判定依据优先用 `subagents` 的 discovery API（S1 确认后），避免自己维护状态机
 
 **验收**
+
 - 无专家的普通会话行为**字节级不变**（所有新分支以「存在在途子智能体」为前置）
 - 构造一个慢子智能体，断言主控 `stopReason` 返回后消息流不关闭
 - `tests/unit/dsh-bridge/` 与 `tests/unit/experts/` 全绿
@@ -191,6 +193,7 @@ S1、S2 决定阶段 3 的形态；S3 决定阶段 2 是否需要更激进的回
 ### 阶段 2 · 单专家进入引擎（P1 + P2）
 
 **改动点**
+
 - `DshRuntimePool`：`#bridges` / `#starting` 的键改为 `${mode}:${expertName}:${expertRevision}`；`createSession` / `resumeSession` 增加 expert 维度
 - `DshApiServer.#createRuntimePool`：DSH_HOME 按 **`<dshHome>/modes/<mode>/<expertName>`** 分（**不含 revision**，见 4.1）；`AIONUI_DSH_PERSONA` = 模式 persona + 专家 persona 合成；按专家配 `AIONUI_DSH_SANDBOX_MODE` / `writableRoots`
 - `DshApiServer.start()`：`prewarmMode` 改为预热**无专家键** `${mode}::`（4.3）
@@ -199,6 +202,7 @@ S1、S2 决定阶段 3 的形态；S3 决定阶段 2 是否需要更激进的回
 - `ExpertService`：`systemPrompt()` 改为供进程启动使用，不再供 prompt 拼接
 
 **验收**
+
 - **无专家会话零退化**：首页直开的对话行为、首轮延迟与改动前一致（这是主路径）
 - 同模式下两个不同专家的会话并发，persona 不串
 - 长会话触发 compaction 后专家行为不变（当前方案必然失效，这是核心收益）
@@ -211,6 +215,7 @@ S1、S2 决定阶段 3 的形态；S3 决定阶段 2 是否需要更激进的回
 ### 阶段 3 · 专家团执行（P3）
 
 **改动点**
+
 - 团队包 8 个 persona → 子智能体模板注册（形态待 S1）
 - 主控 persona 的委派规则段填入实际成员清单
 - 任务图：`owner` + `depends_on`，无依赖并行（承载方式待 S2）
@@ -219,6 +224,7 @@ S1、S2 决定阶段 3 的形态；S3 决定阶段 2 是否需要更激进的回
 - 解开 `ExpertService.resolveForMode` 的 `EXPERT_TYPE_UNSUPPORTED`
 
 **验收**
+
 - 项目管理专家团可召唤，主理人拆出带依赖的任务
 - 两个无依赖成员真正并行（各自独立 session，非同一上下文轮流扮演）
 - 成员工具限制生效：只读成员写不了
@@ -229,6 +235,7 @@ S1、S2 决定阶段 3 的形态；S3 决定阶段 2 是否需要更激进的回
 ### 阶段 4 · 专家活动可见
 
 **改动点**
+
 - 子智能体事件投射到主控通道
 - `updateMapper.ts` 的 `mapUpdateKind` 新增四类：`expert_started` / `expert_delta` / `expert_done` / `expert_tasks`
 - 前端时间线渲染（复用现有工具执行面板链路）
@@ -240,12 +247,14 @@ S1、S2 决定阶段 3 的形态；S3 决定阶段 2 是否需要更激进的回
 单列一阶段，因为它不是纯技术改动——**先看手动召唤跑顺了再决定要不要开**。
 
 **P4 · 主控按需委派**
+
 - 模式主控 persona 的委派规则段填入本模式专家清单
 - 接 `tool-subagent-list-agents` + `tool-subagent`，让主控能发现并派生同模式专家
 - **按模式开关，默认关**；打开后受委派判据约束（只需工具能力就直接做，单点问题才派单个专家）
 - 验收：关闭时行为与阶段 2 完全一致；打开时简单问题不触发委派；委派发生时用户在时间线看得见（依赖阶段 4）
 
 **P5 · 会话内移交**
+
 - 会话中出现「转交给专家」动作 → 生成移交摘要 → 同 workspace 新建带专家的会话
 - `extra.handoff_from_conversation_id` 关联，侧边栏成链
 - 复用边界设计 §7.1 的模式移交链路，**不另造**
