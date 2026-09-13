@@ -539,6 +539,71 @@ describe('useAcpMessage', () => {
     expect(result.current.context_limit).toBe(0);
   });
 
+  it('hydrates the context-usage indicator from the persisted conversation extra', async () => {
+    // The backend mirrors every usage frame onto `extra`, so the meter survives a
+    // conversation switch even before the HTTP snapshot resolves.
+    vi.mocked(getConversationOrNull).mockResolvedValue({
+      id: 'conv-1',
+      type: 'acp',
+      status: 'finished',
+      extra: {
+        last_token_usage: {
+          total_tokens: 47_500,
+          session_cache: { read_tokens: 128_400, write_tokens: 31_200 },
+        },
+        last_context_limit: 65_536,
+      },
+    } as unknown as Awaited<ReturnType<typeof getConversationOrNull>>);
+
+    const { result } = renderHook(() => useAcpMessage('conv-1'));
+
+    await waitFor(() => {
+      expect(result.current.tokenUsage).toEqual({
+        total_tokens: 47_500,
+        session_cache: { read_tokens: 128_400, write_tokens: 31_200 },
+      });
+    });
+    expect(result.current.context_limit).toBe(65_536);
+  });
+
+  it('keeps the session cache totals when a mid-turn frame omits them', async () => {
+    vi.mocked(getConversationOrNull).mockResolvedValue(null);
+
+    const { result } = renderHook(() => useAcpMessage('conv-1'));
+
+    act(() => {
+      responseStreamHandlerRef.current?.({
+        type: 'acp_context_usage',
+        data: {
+          used: 47_500,
+          size: 65_536,
+          _meta: { session_cached_read_tokens: 128_400, session_cached_write_tokens: 31_200 },
+        },
+        msg_id: 'usage-1',
+        conversation_id: 'conv-1',
+      } as unknown as IResponseMessage);
+    });
+
+    await waitFor(() => {
+      expect(result.current.tokenUsage?.session_cache).toEqual({ read_tokens: 128_400, write_tokens: 31_200 });
+    });
+
+    // A later frame with no `_meta` must not blank the cumulative totals.
+    act(() => {
+      responseStreamHandlerRef.current?.({
+        type: 'acp_context_usage',
+        data: { used: 48_000, size: 65_536 },
+        msg_id: 'usage-2',
+        conversation_id: 'conv-1',
+      } as unknown as IResponseMessage);
+    });
+
+    await waitFor(() => {
+      expect(result.current.tokenUsage?.total_tokens).toBe(48_000);
+    });
+    expect(result.current.tokenUsage?.session_cache).toEqual({ read_tokens: 128_400, write_tokens: 31_200 });
+  });
+
   it('does not clobber live stream usage with a slower HTTP snapshot', async () => {
     vi.mocked(getConversationOrNull).mockResolvedValue(null);
     const usageDeferred = deferred<{ used: number; size: number }>();
@@ -728,5 +793,24 @@ describe('tokenUsageFromAcpUsage', () => {
   it('drops a zero-amount cost as unreported', () => {
     const usage = tokenUsageFromAcpUsage({ used: 10, cost: { amount: 0, currency: 'USD' } });
     expect(usage.cost).toBeUndefined();
+  });
+
+  it('maps the backend session-cumulative cache totals separately from the per-turn counters', () => {
+    const usage = tokenUsageFromAcpUsage({
+      used: 47_500,
+      _meta: {
+        cached_read_tokens: 14_080,
+        session_cached_read_tokens: 128_400,
+        session_cached_write_tokens: 31_200,
+      },
+    });
+
+    expect(usage.breakdown).toEqual({ cached_read_tokens: 14_080 });
+    expect(usage.session_cache).toEqual({ read_tokens: 128_400, write_tokens: 31_200 });
+  });
+
+  it('omits session cache totals when the backend does not accumulate them', () => {
+    const usage = tokenUsageFromAcpUsage({ used: 47_500, _meta: { cached_read_tokens: 14_080 } });
+    expect(usage.session_cache).toBeUndefined();
   });
 });

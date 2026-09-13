@@ -226,12 +226,23 @@ export interface TokenUsageCost {
   currency: string;
 }
 
+/**
+ * Cache tokens accumulated across every turn of the session, in contrast to
+ * `TokenUsageBreakdown`'s `cached_*` fields, which cover the latest turn only.
+ */
+export interface TokenUsageSessionCache {
+  read_tokens?: number;
+  write_tokens?: number;
+}
+
 export interface TokenUsageData {
   total_tokens: number;
   /** Per-turn token counters from the agent's end-of-turn usage report */
   breakdown?: TokenUsageBreakdown;
   /** Cumulative session cost as reported by the agent */
   cost?: TokenUsageCost;
+  /** Session-cumulative cache tokens, accumulated by the backend across turns */
+  session_cache?: TokenUsageSessionCache;
 }
 
 export type TChatConversation =
@@ -276,6 +287,10 @@ export type TChatConversation =
           last_token_usage?: TokenUsageData;
           /** Context window capacity from usage_update */
           last_context_limit?: number;
+          /** Session-cumulative cache tokens accumulated by the backend across turns */
+          session_cache_tokens?: { read: number; write: number };
+          /** ACP session the usage snapshot above describes; a mismatch invalidates it */
+          last_usage_session_id?: string;
           /** Persisted session mode for resume support / 持久化的会话模式，用于恢复 */
           session_mode?: string;
           /** Persisted model ID for resume support / 持久化的模型 ID，用于恢复 */

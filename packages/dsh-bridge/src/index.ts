@@ -40,7 +40,14 @@ export type {
   OfficePreviewStatus,
 } from './officePreviewService';
 export type { DesktopShellPort, DshMcpServer } from './types';
-export { mapStopReason, mapUpdateKind, parseToolCallEnvelope } from './updateMapper';
+export {
+  augmentUsagePayload,
+  mapStopReason,
+  mapUpdateKind,
+  parseToolCallEnvelope,
+  parseUsagePayload,
+  projectUsageSnapshot,
+} from './updateMapper';
 export type {
   BridgePermissionDecision,
   BridgePermissionRequest,
@@ -51,5 +58,10 @@ export type {
   DshBridgeOptions,
   DshSession,
   DshSessionConfigOption,
+  SessionCacheTotals,
   ToolCallEnvelope,
+  UsageBreakdown,
+  UsageCost,
+  UsageSnapshot,
+  UsageWirePayload,
 } from './types';

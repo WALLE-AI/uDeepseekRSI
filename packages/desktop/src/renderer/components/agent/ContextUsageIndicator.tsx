@@ -102,21 +102,27 @@ const ContextUsageIndicator: React.FC<ContextUsageIndicatorProps> = ({
         `${t('conversation.contextUsage.output', 'Output')} ${formatTokenCount(breakdown.output_tokens, locale)}`
       );
     }
-    if (breakdown.cached_read_tokens) {
-      breakdownParts.push(
-        `${t('conversation.contextUsage.cachedRead', 'Cache read')} ${formatTokenCount(breakdown.cached_read_tokens, locale)}`
-      );
-    }
-    if (breakdown.cached_write_tokens) {
-      breakdownParts.push(
-        `${t('conversation.contextUsage.cachedWrite', 'Cache write')} ${formatTokenCount(breakdown.cached_write_tokens, locale)}`
-      );
-    }
     if (breakdown.thought_tokens) {
       breakdownParts.push(
         `${t('conversation.contextUsage.thought', 'Thinking')} ${formatTokenCount(breakdown.thought_tokens, locale)}`
       );
     }
+  }
+
+  // Cache counters report the whole session when the backend accumulates them, and fall
+  // back to the agent's latest-turn numbers otherwise. The label is the same either way:
+  // a per-turn cache figure is what older backends can honestly offer.
+  const cacheRead = tokenUsage.session_cache?.read_tokens ?? breakdown?.cached_read_tokens;
+  const cacheWrite = tokenUsage.session_cache?.write_tokens ?? breakdown?.cached_write_tokens;
+  if (cacheRead) {
+    breakdownParts.push(
+      `${t('conversation.contextUsage.cachedRead', 'Cache read')} ${formatTokenCount(cacheRead, locale)}`
+    );
+  }
+  if (cacheWrite) {
+    breakdownParts.push(
+      `${t('conversation.contextUsage.cachedWrite', 'Cache write')} ${formatTokenCount(cacheWrite, locale)}`
+    );
   }
 
   const details = (

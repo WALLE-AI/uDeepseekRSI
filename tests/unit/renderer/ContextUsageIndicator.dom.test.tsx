@@ -104,6 +104,40 @@ describe('ContextUsageIndicator', () => {
     expect(popover).not.toContain('Thinking');
   });
 
+  it('prefers the session-cumulative cache totals over the latest turn figures', () => {
+    const { getByTestId } = render(
+      <ContextUsageIndicator
+        tokenUsage={{
+          total_tokens: 14_118,
+          breakdown: { cached_read_tokens: 14_080, cached_write_tokens: 2_000 },
+          session_cache: { read_tokens: 128_400, write_tokens: 31_200 },
+        }}
+        context_limit={1_000_000}
+      />
+    );
+
+    const popover = getByTestId('popover-content').textContent ?? '';
+    expect(popover).toContain('Cache read 128.4K');
+    expect(popover).toContain('Cache write 31.2K');
+    // The per-turn figures must not be shown alongside — one cache number per
+    // label, or the reader cannot tell which scope they are looking at.
+    expect(popover).not.toContain('Cache read 14.1K');
+    expect(popover).not.toContain('Cache write 2.0K');
+  });
+
+  it('falls back to the latest-turn cache figures when the backend reports no session totals', () => {
+    const { getByTestId } = render(
+      <ContextUsageIndicator
+        tokenUsage={{ total_tokens: 14_118, breakdown: { cached_write_tokens: 2_048 } }}
+        context_limit={1_000_000}
+      />
+    );
+
+    const popover = getByTestId('popover-content').textContent ?? '';
+    expect(popover).toContain('Cache write 2.0K');
+    expect(popover).not.toContain('Cache read');
+  });
+
   it('formats cost, percentage and token counts in the app language, not the host locale', () => {
     mockLanguage = 'de-DE';
     const { getByTestId } = render(

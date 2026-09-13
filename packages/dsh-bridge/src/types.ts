@@ -26,6 +26,43 @@ export type BridgeUpdate = {
   payload: unknown;
 };
 
+/** Per-turn token counters dsh reports under a usage frame's `_meta`. */
+export type UsageBreakdown = {
+  input_tokens?: number;
+  output_tokens?: number;
+  thought_tokens?: number;
+  cached_read_tokens?: number;
+  cached_write_tokens?: number;
+};
+
+export type UsageCost = { amount: number; currency: string };
+
+/** Session-cumulative cache totals the bridge accumulates across turns. */
+export type SessionCacheTotals = { read: number; write: number };
+
+/**
+ * Latest usage report for a conversation, persisted on `extra.last_token_usage`
+ * so the context meter survives a conversation switch or an app restart.
+ *
+ * Mirrors the desktop `TokenUsageData` shape structurally — declared here rather
+ * than imported, because this package must not depend on the desktop app.
+ */
+export type UsageSnapshot = {
+  total_tokens: number;
+  /** Per-turn counters, in contrast to the session-cumulative cache totals. */
+  breakdown?: UsageBreakdown;
+  /** Cumulative session cost as reported by the agent. */
+  cost?: UsageCost;
+};
+
+/** The ACP `usage_update` wire shape, as forwarded to clients and served by `GET /usage`. */
+export type UsageWirePayload = {
+  used: number;
+  size: number;
+  cost?: UsageCost;
+  _meta?: Record<string, unknown>;
+};
+
 export type BridgePermissionRequest = {
   conversationId?: string;
   sessionId: string;
