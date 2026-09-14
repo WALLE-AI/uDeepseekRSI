@@ -9,6 +9,7 @@ import { useTranslation } from 'react-i18next';
 import { Copy, Left, Right, Refresh, Loading } from '@icon-park/react';
 import { Button, Input } from '@arco-design/web-react';
 import { ipcBridge } from '@/common';
+import { buildWebviewAttributes } from './webviewAttributes';
 import { InternalNavTracker, shouldResetHistoryForUrlProp } from './webviewHistory';
 
 export interface WebviewHostProps {
@@ -20,6 +21,11 @@ export interface WebviewHostProps {
   showNavBar?: boolean;
   /** Webview partition for cache/session isolation, e.g. "persist:ext-settings-feishu" */
   partition?: string;
+  /**
+   * Enable Chromium's built-in PDF viewer so PDF URLs render inline. Only the Browser tab
+   * should opt in — see buildWebviewAttributes for why it is off by default.
+   */
+  allowPdfViewer?: boolean;
   /** Expose this webview to the agent browser bridge. Only Browser tabs should enable this. */
   agentBrowserControl?: boolean;
   /** Whether this is the Browser tab currently visible to the user. */
@@ -71,6 +77,7 @@ const WebviewHost: React.FC<WebviewHostProps> = ({
   id,
   showNavBar = false,
   partition,
+  allowPdfViewer = false,
   agentBrowserControl = false,
   agentBrowserControlActive = false,
   agentBrowserControlRequestId,
@@ -614,30 +621,15 @@ const WebviewHost: React.FC<WebviewHostProps> = ({
     [currentUrl]
   );
 
-  // Build webview attributes
   /**
-   * 这个 webview 渲染任意外部网页，所以三个开关都按「不信任页面」来设。
+   * 属性表的取舍（不可信页面默认值、plugins 为何默认关闭、布尔属性「看存在与否」的坑）
+   * 都在 webviewAttributes.ts 里，那里有完整说明和单测。
    *
-   * contextIsolation=yes 是刻意打开的：Electron 官方建议即使关掉 nodeIntegration 也保持
-   * 隔离，多一层纵深。我们不依赖与页面共享 JS 上下文；StarOffice 的缩放脚本只通过
-   * console-message 发送数值事件，隔离开着照样成立。别为了图方便把它关回 no：那样以后任何
-   * preload / IPC 暴露都会被不可信页面直接摸到。
-   *
-   * This webview renders arbitrary external pages, so all three flags assume the page is
-   * untrusted. contextIsolation is deliberately on: Electron recommends keeping it even
-   * with nodeIntegration off, for defence in depth. Nothing here needs a shared JS context;
-   * the StarOffice zoom helper only sends numeric events through `console-message`, which
-   * works with isolation enabled. Do not flip
-   * this back to `no` for convenience: any future preload or IPC surface would then be
-   * directly reachable by untrusted pages.
+   * The attribute decisions — hostile-page defaults, why `plugins` is off by default, and
+   * the presence-based boolean-attribute trap — live in webviewAttributes.ts, which carries
+   * the full explanation and its unit tests.
    */
-  const webviewAttrs: Record<string, string> = {
-    allowpopups: 'false',
-    webpreferences: 'contextIsolation=yes, nodeIntegration=no, nativeWindowOpen=no',
-  };
-  if (partition) {
-    webviewAttrs.partition = partition;
-  }
+  const webviewAttrs = buildWebviewAttributes({ partition, allowPdfViewer });
 
   return (
     <div

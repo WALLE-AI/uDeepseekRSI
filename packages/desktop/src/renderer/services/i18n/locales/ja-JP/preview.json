@@ -170,7 +170,14 @@
     "tabLimitReached": "タブ数の上限（{{count}}）に達しました。新しいタブを開く前にタブを閉じてください。",
     "agentFirstUseTitle": "エージェントがアプリ内ブラウザーを使用しています",
     "agentFirstUseContent": "このパネル内でページを開き、クリックや内容の読み取りができます。ログイン状態は保持されます。",
-    "agentFirstUseAction": "設定を開く"
+    "agentFirstUseAction": "設定を開く",
+    "download": {
+      "completedTitle": "ダウンロード完了",
+      "completedContent": "{{fileName}} をダウンロードフォルダーに保存しました。",
+      "failedTitle": "ダウンロード失敗",
+      "failedContent": "{{fileName}} をダウンロードできませんでした。",
+      "reveal": "フォルダーに表示"
+    }
   },
   "saveConflict": "保存できませんでした：このファイルは開いた後に変更されています。再読み込みで他の変更を確認できます——あなたの編集は未保存のまま残っています。",
   "persistQuotaExceeded": "ローカルストレージが満杯のため、このプロジェクトで開いているタブを記憶できません。タブを閉じるか、サイトデータを消去してください。",

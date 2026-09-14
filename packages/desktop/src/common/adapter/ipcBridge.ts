@@ -757,6 +757,23 @@ export const application = {
    */
   clearBrowserData: bridge.buildProvider<IBridgeResponse<void>, void>('app.clear-browser-data'),
   /**
+   * 在系统文件管理器里显示一个浏览器下载下来的文件。
+   *
+   * 为什么不用 shell.showItemInFolder：那条路径走后端，后端会用 #registeredPath 校验，
+   * 要求路径落在某个已注册的项目根目录内，而下载目录在所有项目之外，必然被拒。这里走
+   * Electron IPC，并在主进程校验路径确实位于受控下载目录内。
+   *
+   * Reveal a browser-downloaded file in the OS file manager. `shell.showItemInFolder`
+   * cannot be reused: it routes through the backend, which validates paths with
+   * #registeredPath and requires them to sit inside a registered project root — the
+   * downloads directory is outside every project, so it is always rejected. This goes over
+   * Electron IPC instead, and the main process verifies the path really is inside the
+   * controlled downloads directory.
+   */
+  revealBrowserDownload: bridge.buildProvider<IBridgeResponse<void>, { savePath: string }>(
+    'app.reveal-browser-download'
+  ),
+  /**
    * 渲染进程把侧边浏览器 webview 的 webContents id 报给主进程，用于把单目标 CDP 通道
    * 附加到它。
    *
@@ -1549,6 +1566,19 @@ export const preview = {
     targetId: string;
     active: boolean;
   }>('preview.browser-control-activity-local'),
+  /**
+   * 应用内浏览器下载结束。Chromium 不能内联渲染的响应（典型是 attachment 形式的 PDF）
+   * 会变成下载，这个事件让结果可见，而不是悄无声息地消失。
+   *
+   * An in-app browser download finished. Responses Chromium cannot render inline (typically
+   * an attachment-disposition PDF) become downloads; this event makes the outcome visible
+   * instead of letting it vanish silently.
+   */
+  browserDownloadLocal: bridge.buildEmitter<{
+    state: 'completed' | 'cancelled' | 'interrupted';
+    fileName: string;
+    savePath?: string;
+  }>('preview.browser-download-local'),
 };
 
 // ---------------------------------------------------------------------------

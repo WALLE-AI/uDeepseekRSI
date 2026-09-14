@@ -170,7 +170,14 @@
     "tabLimitReached": "标签页数量已达上限（{{count}} 个），请先关闭一个标签页。",
     "agentFirstUseTitle": "Agent 正在使用应用内浏览器",
     "agentFirstUseContent": "它可以在这个面板里打开网页、点击和读取内容。你的登录状态会被保留。",
-    "agentFirstUseAction": "前往设置"
+    "agentFirstUseAction": "前往设置",
+    "download": {
+      "completedTitle": "下载完成",
+      "completedContent": "{{fileName}} 已保存到下载文件夹。",
+      "failedTitle": "下载失败",
+      "failedContent": "{{fileName}} 未能下载。",
+      "reveal": "在文件夹中显示"
+    }
   },
   "saveConflict": "保存失败：该文件在你打开后已被改动。可重新加载查看其他改动——你的编辑仍在，尚未保存。",
   "persistQuotaExceeded": "本地存储已满，无法再记住该项目打开的标签页。请关闭一些标签页或清理站点数据。",

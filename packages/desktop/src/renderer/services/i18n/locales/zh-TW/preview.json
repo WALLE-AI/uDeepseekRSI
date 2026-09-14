@@ -170,7 +170,14 @@
     "tabLimitReached": "標籤頁數量已達上限（{{count}} 個），請先關閉一個標籤頁。",
     "agentFirstUseTitle": "Agent 正在使用應用內瀏覽器",
     "agentFirstUseContent": "它可以在這個面板裡開啟網頁、點擊和讀取內容。你的登入狀態會被保留。",
-    "agentFirstUseAction": "前往設定"
+    "agentFirstUseAction": "前往設定",
+    "download": {
+      "completedTitle": "下載完成",
+      "completedContent": "{{fileName}} 已儲存至下載資料夾。",
+      "failedTitle": "下載失敗",
+      "failedContent": "{{fileName}} 未能下載。",
+      "reveal": "在資料夾中顯示"
+    }
   },
   "saveConflict": "儲存失敗：該檔案在你開啟後已被變更。可重新載入查看其他變更——你的編輯仍在，尚未儲存。",
   "persistQuotaExceeded": "本機儲存空間已滿，無法再記住該專案開啟的標籤頁。請關閉一些標籤頁或清理網站資料。",

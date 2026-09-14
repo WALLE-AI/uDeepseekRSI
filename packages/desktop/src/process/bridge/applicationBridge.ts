@@ -5,9 +5,14 @@
  */
 
 import type { BrowserWindow } from 'electron';
-import { app, session } from 'electron';
+import { app, session, shell } from 'electron';
 import { ipcBridge } from '@/common';
 import { BROWSER_SESSION_PARTITION } from '@/common/config/constants';
+import {
+  browserDownloadDirectory,
+  installBrowserDownloadPolicy,
+  isInsideDirectory,
+} from '@process/services/browser-control/browserDownloads';
 import { getManagedBrowserCredentialStore } from '@process/services/browser-control/managedCredentialStore';
 import { ProcessConfig } from '@process/utils/initStorage';
 import { getZoomFactor, setZoomFactor } from '@process/utils/zoom';
@@ -101,6 +106,20 @@ export function setApplicationMainWindow(win: BrowserWindow): void {
 export function initApplicationBridge(): void {
   // Platform-agnostic handlers: systemInfo, updateSystemInfo, getPath
   initApplicationBridgeCore();
+
+  /**
+   * 下载处理装在这里，而不是 CDP 通道里：用户关掉「允许 Agent 操作浏览器」时
+   * startCdpBridge 整个不会执行，但浏览器 tab 照常能用、下载照常会发生。
+   * initApplicationBridge 是无条件调用的，所以这条策略始终生效。
+   *
+   * Download handling is installed here rather than in the CDP bridge: with agent browser
+   * control switched off, startCdpBridge never runs at all, yet Browser tabs keep working
+   * and downloads keep happening. initApplicationBridge is called unconditionally, so this
+   * policy always applies.
+   */
+  installBrowserDownloadPolicy((event) => {
+    ipcBridge.preview.browserDownloadLocal.emit(event);
+  });
 
   ipcBridge.application.restart.provider(async () => {
     // Backend subprocess shutdown is handled by backendManager.stop() in the
@@ -225,6 +244,33 @@ export function initApplicationBridge(): void {
       await browserSession.clearStorageData();
       await browserSession.clearCache();
       await browserSession.clearAuthCache();
+      return { success: true };
+    } catch (e) {
+      return { success: false, msg: e instanceof Error ? e.message : String(e) };
+    }
+  });
+
+  /**
+   * 只允许显示受控下载目录里的文件。
+   *
+   * 渲染进程传来的路径不能直接交给系统文件管理器：那等于给了任意路径一个「在资源管理器
+   * 里打开」的能力。这里用 isInsideDirectory 做包含性校验（已 resolve，且拒绝 `..`
+   * 逃逸和 `AionUi-evil` 这类前缀同名目录），只有确实是我们刚存下去的文件才放行。
+   * 不用 shell.openPath：那会直接执行下载下来的文件。
+   *
+   * Only files inside the controlled downloads directory may be revealed. A
+   * renderer-supplied path cannot go straight to the OS file manager — that would grant
+   * "show me any path" to the renderer. isInsideDirectory performs a resolved containment
+   * check that rejects `..` escapes and prefix-sharing siblings like `AionUi-evil`, so only
+   * a file we actually saved gets through. Deliberately not shell.openPath, which would
+   * execute the downloaded file.
+   */
+  ipcBridge.application.revealBrowserDownload.provider(async ({ savePath }) => {
+    try {
+      if (!savePath || !isInsideDirectory(browserDownloadDirectory(), savePath)) {
+        return { success: false, msg: 'The path is outside the browser downloads directory.' };
+      }
+      shell.showItemInFolder(savePath);
       return { success: true };
     } catch (e) {
       return { success: false, msg: e instanceof Error ? e.message : String(e) };

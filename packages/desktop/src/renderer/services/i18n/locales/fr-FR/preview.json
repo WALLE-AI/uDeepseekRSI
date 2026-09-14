@@ -170,7 +170,14 @@
     "tabLimitReached": "Limite d'onglets atteinte ({{count}}). Fermez un onglet avant d'en ouvrir un autre.",
     "agentFirstUseTitle": "L'agent utilise le navigateur intégré",
     "agentFirstUseContent": "Il peut ouvrir des pages, cliquer et lire du contenu dans ce panneau. Votre connexion est conservée.",
-    "agentFirstUseAction": "Ouvrir les paramètres"
+    "agentFirstUseAction": "Ouvrir les paramètres",
+    "download": {
+      "completedTitle": "Téléchargement terminé",
+      "completedContent": "{{fileName}} a été enregistré dans votre dossier Téléchargements.",
+      "failedTitle": "Échec du téléchargement",
+      "failedContent": "{{fileName}} n'a pas été téléchargé.",
+      "reveal": "Afficher dans le dossier"
+    }
   },
   "saveConflict": "Échec de l'enregistrement : ce fichier a changé sur le disque depuis que vous l'avez ouvert. Rechargez pour voir les autres modifications — vos modifications sont toujours là, non enregistrées.",
   "persistQuotaExceeded": "Le stockage local est plein : les onglets ouverts de ce projet ne peuvent plus être mémorisés. Fermez des onglets ou effacez les données du site.",

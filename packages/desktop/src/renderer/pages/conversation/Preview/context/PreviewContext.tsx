@@ -11,6 +11,7 @@ import { chatFileRefKey, isChatFileRef } from '@/common/types/chatFile';
 import { emitter } from '@/renderer/utils/emitter';
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { BROWSER_BLANK_URL, BROWSER_TAB_FALLBACK_TITLE, MAX_BROWSER_TABS } from '../browser/constants';
+import { notifyBrowserDownload } from '../browser/downloadNotice';
 import { maybeNotifyFirstAgentBrowserUse } from '../browser/firstUseNotice';
 import { listPersistedPreviewScopeKeys, previewScopeStorageKey, type PreviewScopeKey } from './previewScope';
 import { peKey } from '@/renderer/pages/conversation/explorer/explorerModel';
@@ -1450,6 +1451,16 @@ export const PreviewProvider: React.FC<{ children: React.ReactNode }> = ({ child
         updateTab(event.tabId, { metadata: { agentActive: event.active } });
         if (event.active) maybeNotifyFirstAgentBrowserUse();
       }) ?? (() => {});
+    /**
+     * 下载是浏览器里唯一「不改变页面」的结果，所以必须主动告诉用户，否则和「点了没反应」
+     * 无法区分。见 downloadNotice.ts。
+     *
+     * A download is the one browser outcome that leaves the page untouched, so it has to be
+     * announced — otherwise it is indistinguishable from nothing happening. See
+     * downloadNotice.ts.
+     */
+    const unsubscribeBrowserDownload =
+      ipcBridge.preview.browserDownloadLocal?.on((event) => notifyBrowserDownload(event)) ?? (() => {});
 
     return () => {
       emitter.off('preview.open', handleEmitterPreviewOpen);
@@ -1458,6 +1469,7 @@ export const PreviewProvider: React.FC<{ children: React.ReactNode }> = ({ child
       unsubscribeBrowserControl();
       unsubscribeBrowserControlState();
       unsubscribeBrowserControlActivity();
+      unsubscribeBrowserDownload();
     };
   }, [closeTab, openPreview, updateTab]);
 

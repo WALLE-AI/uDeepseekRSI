@@ -170,7 +170,14 @@
     "tabLimitReached": "Tab-Limit erreicht ({{count}}). Schließen Sie zuerst einen Tab.",
     "agentFirstUseTitle": "Der Agent nutzt den integrierten Browser",
     "agentFirstUseContent": "Er kann in diesem Bereich Seiten öffnen, klicken und Inhalte lesen. Deine Anmeldung bleibt erhalten.",
-    "agentFirstUseAction": "Einstellungen öffnen"
+    "agentFirstUseAction": "Einstellungen öffnen",
+    "download": {
+      "completedTitle": "Download abgeschlossen",
+      "completedContent": "{{fileName}} wurde in Ihrem Download-Ordner gespeichert.",
+      "failedTitle": "Download fehlgeschlagen",
+      "failedContent": "{{fileName}} wurde nicht heruntergeladen.",
+      "reveal": "Im Ordner anzeigen"
+    }
   },
   "saveConflict": "Speichern fehlgeschlagen: Diese Datei wurde auf der Festplatte geändert, nachdem Sie sie geöffnet haben. Neu laden, um die anderen Änderungen zu sehen — Ihre Bearbeitungen sind noch da, ungespeichert.",
   "persistQuotaExceeded": "Der lokale Speicher ist voll, offene Tabs dieses Projekts können nicht mehr gemerkt werden. Schließen Sie einige Tabs oder löschen Sie die Websitedaten.",

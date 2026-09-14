@@ -115,6 +115,9 @@ const BrowserViewer: React.FC<BrowserViewerProps> = ({
         id={tabId}
         url={url || BROWSER_BLANK_URL}
         partition={BROWSER_SESSION_PARTITION}
+        // 浏览器 tab 要能像浏览器一样直接显示 PDF；其余 webview 不开这个插件面。
+        // A Browser tab must render PDFs inline like a real browser; no other webview opts in.
+        allowPdfViewer
         agentBrowserControl
         agentBrowserControlActive={active}
         agentBrowserControlRequestId={browserControlRequestId}

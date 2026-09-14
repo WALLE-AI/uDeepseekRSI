@@ -170,7 +170,14 @@
     "tabLimitReached": "Sekme sınırına ulaşıldı ({{count}}). Yeni bir sekme açmadan önce bir sekmeyi kapatın.",
     "agentFirstUseTitle": "Aracı uygulama içi tarayıcıyı kullanıyor",
     "agentFirstUseContent": "Bu panelde sayfa açabilir, tıklayabilir ve içerik okuyabilir. Oturum bilgileriniz korunur.",
-    "agentFirstUseAction": "Ayarları aç"
+    "agentFirstUseAction": "Ayarları aç",
+    "download": {
+      "completedTitle": "İndirme tamamlandı",
+      "completedContent": "{{fileName}} İndirilenler klasörünüze kaydedildi.",
+      "failedTitle": "İndirme başarısız",
+      "failedContent": "{{fileName}} indirilemedi.",
+      "reveal": "Klasörde göster"
+    }
   },
   "saveConflict": "Kaydedilemedi: bu dosya siz açtıktan sonra diskte değişti. Diğer değişiklikleri görmek için yeniden yükleyin — düzenlemeleriniz kaydedilmemiş olarak duruyor.",
   "persistQuotaExceeded": "Yerel depolama dolu, bu proje için açık sekmeler artık hatırlanamıyor. Bazı sekmeleri kapatın veya site verilerini temizleyin.",

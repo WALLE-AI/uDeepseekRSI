@@ -170,7 +170,14 @@
     "tabLimitReached": "Limite de abas atingido ({{count}}). Feche uma aba antes de abrir outra.",
     "agentFirstUseTitle": "O agente está usando o navegador interno",
     "agentFirstUseContent": "Ele pode abrir páginas, clicar e ler conteúdo neste painel. Seu login é preservado.",
-    "agentFirstUseAction": "Abrir configurações"
+    "agentFirstUseAction": "Abrir configurações",
+    "download": {
+      "completedTitle": "Download concluído",
+      "completedContent": "{{fileName}} foi salvo na sua pasta Downloads.",
+      "failedTitle": "Falha no download",
+      "failedContent": "{{fileName}} não foi baixado.",
+      "reveal": "Mostrar na pasta"
+    }
   },
   "saveConflict": "Não foi possível salvar: este arquivo mudou no disco depois que você o abriu. Recarregue para ver as outras alterações — suas edições continuam aqui, não salvas.",
   "persistQuotaExceeded": "O armazenamento local está cheio, então as abas abertas deste projeto não podem mais ser lembradas. Feche algumas abas ou limpe os dados do site.",

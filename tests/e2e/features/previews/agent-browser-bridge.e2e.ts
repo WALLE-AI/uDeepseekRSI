@@ -248,6 +248,63 @@ test.describe('Agent browser control (multi-target CDP gateway)', () => {
     expect(target?.webSocketDebuggerUrl).not.toContain('token=');
   });
 
+  test('gives Browser tabs the built-in PDF viewer, and nothing else', async ({ electronApp }) => {
+    /**
+     * Regression test for "the Browser tab cannot preview PDFs".
+     *
+     * Chromium's built-in PDF viewer is gated behind the `plugins` webPreference, which was
+     * never set. With it off a PDF navigation is not an error — Chromium reclassifies it as
+     * a download, the page stays put, and did-fail-load reports ERR_ABORTED(-3), which
+     * WebviewHost ignores. So the tab silently went blank and no failure surfaced anywhere.
+     *
+     * This asserts the flag on the *real* attached webContents rather than on the attribute
+     * object: `buildWebviewAttributes` is unit-tested, but only running the app proves the
+     * attribute survived React rendering and Electron's webview attachment. What it
+     * deliberately does not assert is that PDFium paints pixels — that is Chromium's
+     * contract, not ours, and driving a PDF through the agent is impossible here anyway
+     * (validateBrowserNavigation blocks private hosts, so a local fixture server is
+     * unreachable from an agent-initiated navigation).
+     *
+     * The negative half matters as much as the positive one: `plugins` widens the surface
+     * of a webview that loads arbitrary untrusted pages, so it must stay off everywhere the
+     * Browser tab is not — including the main window, which carries the preload bridge.
+     */
+    const { port, token } = await readBridgeEnv(electronApp);
+    expect(port).not.toBeNull();
+    expect(token).toBeTruthy();
+
+    // A Browser tab has to exist before there is anything to inspect; createTarget mounts
+    // one through the same path the agent uses.
+    const endpoint = `ws://127.0.0.1:${port}/aionui-cdp?token=${token}`;
+    const created = await cdpCommand<{ targetId: string }>(endpoint, 'Target.createTarget', { url: 'about:blank' });
+    expect(created.targetId).toMatch(/^aionui-browser-/);
+
+    const readPluginFlags = (): Promise<{ webviews: boolean[]; mainWindow: boolean | null }> =>
+      electronApp.evaluate(async ({ webContents, BrowserWindow }) => {
+        const pluginsEnabled = (contents: Electron.WebContents): boolean =>
+          Boolean((contents.getLastWebPreferences() as { plugins?: boolean } | null)?.plugins);
+        const win = BrowserWindow.getAllWindows().find((w) => !w.isDestroyed());
+        return {
+          webviews: webContents
+            .getAllWebContents()
+            .filter((contents) => !contents.isDestroyed() && contents.getType() === 'webview')
+            .map(pluginsEnabled),
+          mainWindow: win ? pluginsEnabled(win.webContents) : null,
+        };
+      });
+
+    // The webview attaches a moment after createTarget resolves, so poll rather than race it.
+    const deadline = Date.now() + 20_000;
+    let flags = await readPluginFlags();
+    while (!flags.webviews.some(Boolean) && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      flags = await readPluginFlags();
+    }
+
+    expect(flags.webviews.some(Boolean)).toBe(true);
+    expect(flags.mainWindow).toBe(false);
+  });
+
   test('refuses a WebSocket upgrade without a valid token', async ({ electronApp }) => {
     const { port, token } = await readBridgeEnv(electronApp);
     expect(port).not.toBeNull();
