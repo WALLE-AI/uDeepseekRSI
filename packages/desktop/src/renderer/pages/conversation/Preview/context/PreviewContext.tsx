@@ -7,11 +7,11 @@
 import { ipcBridge } from '@/common';
 import type { PreviewContentType } from '@/common/types/office/preview';
 import type { ChatFileRef, ContentEncoding } from '@/common/types/chatFile';
-import { chatFileRefKey, isChatFileRef } from '@/common/types/chatFile';
+import { chatFileRefKey, isChatFileRef, localFileRef } from '@/common/types/chatFile';
 import { emitter } from '@/renderer/utils/emitter';
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { BROWSER_BLANK_URL, BROWSER_TAB_FALLBACK_TITLE, MAX_BROWSER_TABS } from '../browser/constants';
-import { notifyBrowserDownload } from '../browser/downloadNotice';
+import { confirmBrowserDownload, notifyBrowserDownload } from '../browser/downloadNotice';
 import { maybeNotifyFirstAgentBrowserUse } from '../browser/firstUseNotice';
 import { listPersistedPreviewScopeKeys, previewScopeStorageKey, type PreviewScopeKey } from './previewScope';
 import { peKey } from '@/renderer/pages/conversation/explorer/explorerModel';
@@ -1460,7 +1460,40 @@ export const PreviewProvider: React.FC<{ children: React.ReactNode }> = ({ child
      * downloadNotice.ts.
      */
     const unsubscribeBrowserDownload =
-      ipcBridge.preview.browserDownloadLocal?.on((event) => notifyBrowserDownload(event)) ?? (() => {});
+      ipcBridge.preview.browserDownloadLocal?.on((event) => {
+        /**
+         * PDF 是特例：Chromium 在 partition+plugins 组合下无法内联渲染 PDF
+         * （electron/electron#27121），下载兜底接住的多半就是 PDF。与其只弹一条
+         * "已下载"的提示，不如直接用现成的 PDF 预览 tab 把它打开 —— 跳过提示，
+         * 因为打开的 tab 本身就是最直接的反馈。
+         *
+         * PDF is a special case: Chromium can't render a PDF inline when partition and
+         * plugins are combined (electron/electron#27121), so most downloads this
+         * fallback catches are PDFs. Rather than only toasting "downloaded", open it
+         * directly in the existing PDF preview tab — skip the toast, since the opened
+         * tab is itself the most direct feedback.
+         */
+        if (event.state === 'completed' && event.isPdf && event.savePath) {
+          openPreview('', 'pdf', {
+            fileRef: localFileRef(event.savePath),
+            file_name: event.fileName,
+            file_path: event.savePath,
+          });
+          return;
+        }
+        notifyBrowserDownload(event);
+      }) ?? (() => {});
+    /**
+     * 可执行文件和脚本在落盘前要先问用户。问题由主进程提出（它才知道 MIME、体积和真实
+     * 文件名），但必须在这里问 —— 主进程没有 i18n，而这句话必须用用户的语言说。
+     *
+     * Programs and scripts are confirmed before they reach the disk. The question originates in
+     * the main process, which is the only side that knows the MIME type, the size, and the real
+     * file name, but it has to be asked here: the main process has no i18n and this sentence has
+     * to be in the user's language.
+     */
+    const unsubscribeBrowserDownloadConfirm =
+      ipcBridge.preview.browserDownloadConfirmLocal?.on((event) => confirmBrowserDownload(event)) ?? (() => {});
 
     return () => {
       emitter.off('preview.open', handleEmitterPreviewOpen);
@@ -1470,6 +1503,7 @@ export const PreviewProvider: React.FC<{ children: React.ReactNode }> = ({ child
       unsubscribeBrowserControlState();
       unsubscribeBrowserControlActivity();
       unsubscribeBrowserDownload();
+      unsubscribeBrowserDownloadConfirm();
     };
   }, [closeTab, openPreview, updateTab]);
 

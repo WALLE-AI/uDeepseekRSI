@@ -126,6 +126,17 @@
     "previousPage": "上一頁",
     "nextPage": "下一頁",
     "fitWidth": "符合寬度",
+    "goToPage": "跳至頁面",
+    "search": {
+      "open": "在文件中搜尋",
+      "close": "關閉搜尋",
+      "placeholder": "在文件中搜尋",
+      "previous": "上一處",
+      "next": "下一處",
+      "searching": "搜尋中…",
+      "noResults": "無結果",
+      "count": "{{current}}/{{total}}"
+    },
     "errors": {
       "password": "暫不支援預覽受密碼保護的 PDF",
       "invalid": "PDF 檔案已損毀或格式無效",
@@ -176,7 +187,15 @@
       "completedContent": "{{fileName}} 已儲存至下載資料夾。",
       "failedTitle": "下載失敗",
       "failedContent": "{{fileName}} 未能下載。",
-      "reveal": "在資料夾中顯示"
+      "reveal": "在資料夾中顯示",
+      "blockedTitle": "下載已被封鎖",
+      "blockedTooLarge": "{{fileName}} 超過下載大小限制，未儲存。",
+      "blockedDeclined": "{{fileName}} 未儲存。",
+      "confirmTitle": "要儲存這個下載嗎？",
+      "confirmExecutable": "{{fileName}} 是可執行程式，執行它可能會變更或損壞你的電腦。",
+      "confirmScript": "{{fileName}} 是指令碼檔案，開啟它會在你的電腦上執行命令。",
+      "confirmSave": "儲存",
+      "confirmDiscard": "不儲存"
     }
   },
   "saveConflict": "儲存失敗：該檔案在你開啟後已被變更。可重新載入查看其他變更——你的編輯仍在，尚未儲存。",

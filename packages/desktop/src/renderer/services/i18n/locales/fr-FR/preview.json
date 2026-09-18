@@ -126,6 +126,17 @@
     "previousPage": "Page précédente",
     "nextPage": "Page suivante",
     "fitWidth": "Ajuster à la largeur",
+    "goToPage": "Aller à la page",
+    "search": {
+      "open": "Rechercher dans le document",
+      "close": "Fermer la recherche",
+      "placeholder": "Rechercher dans le document",
+      "previous": "Résultat précédent",
+      "next": "Résultat suivant",
+      "searching": "Recherche…",
+      "noResults": "Aucun résultat",
+      "count": "{{current}}/{{total}}"
+    },
     "errors": {
       "password": "Les PDF protégés par mot de passe ne sont pas encore pris en charge",
       "invalid": "Ce PDF est endommagé ou non valide",
@@ -176,7 +187,15 @@
       "completedContent": "{{fileName}} a été enregistré dans votre dossier Téléchargements.",
       "failedTitle": "Échec du téléchargement",
       "failedContent": "{{fileName}} n'a pas été téléchargé.",
-      "reveal": "Afficher dans le dossier"
+      "reveal": "Afficher dans le dossier",
+      "blockedTitle": "Téléchargement bloqué",
+      "blockedTooLarge": "{{fileName}} dépasse la limite de téléchargement et n'a pas été enregistré.",
+      "blockedDeclined": "{{fileName}} n'a pas été enregistré.",
+      "confirmTitle": "Enregistrer ce téléchargement ?",
+      "confirmExecutable": "{{fileName}} est un programme. L'exécuter peut modifier ou endommager votre ordinateur.",
+      "confirmScript": "{{fileName}} est un script. L'ouvrir exécute des commandes sur votre ordinateur.",
+      "confirmSave": "Enregistrer",
+      "confirmDiscard": "Ne pas enregistrer"
     }
   },
   "saveConflict": "Échec de l'enregistrement : ce fichier a changé sur le disque depuis que vous l'avez ouvert. Rechargez pour voir les autres modifications — vos modifications sont toujours là, non enregistrées.",

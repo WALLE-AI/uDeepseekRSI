@@ -22,7 +22,11 @@ export const buildPdfDocumentSource = (fileRef?: ChatFileRef, content?: string):
     return {
       url: buildPdfSrc(fileRef),
       httpHeaders: getBackendAuthHeaders(),
-      withCredentials: true,
+      // No withCredentials: auth travels in the token header, not cookies, and the
+      // desktop backend's CORS response never sends Access-Control-Allow-Credentials
+      // — a credentialed request is silently blocked by the browser regardless of
+      // the 200 the server returns. See SpeechToTextService.ts for the same rule.
+      withCredentials: false,
     };
   }
   return content || null;

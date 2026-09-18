@@ -14,6 +14,7 @@ import {
   isInsideDirectory,
 } from '@process/services/browser-control/browserDownloads';
 import { getManagedBrowserCredentialStore } from '@process/services/browser-control/managedCredentialStore';
+import { installBrowserSessionGuards } from '@process/services/browser-control/sessionGuards';
 import { ProcessConfig } from '@process/utils/initStorage';
 import { getZoomFactor, setZoomFactor } from '@process/utils/zoom';
 import { getCdpStatus, updateCdpConfig } from '@process/utils/configureChromium';
@@ -24,6 +25,22 @@ import type { IStartOnBootStatus } from '@/common/adapter/ipcBridge';
 import { restartApplication } from './restartApplication';
 
 let mainWindowRef: BrowserWindow | null = null;
+
+/**
+ * 等待用户答复的下载确认，按 download id 索引。
+ *
+ * 超时是必需的，不是保险措施：渲染进程崩掉、窗口被关掉、或者用户干脆没看见通知，
+ * 这个 Promise 就永远不会 resolve，而挂在它后面的是一个暂停中的 DownloadItem。
+ * 到点按「拒绝」处理 —— 没人回答不等于同意。
+ *
+ * Download confirmations awaiting the user's answer, keyed by download id. The timeout is a
+ * requirement rather than a safety net: if the renderer crashes, the window is closed, or the
+ * user simply never sees the prompt, the promise never settles and a paused DownloadItem hangs
+ * off it. Expiry counts as a refusal — nobody answering is not the same as agreeing.
+ */
+const pendingDownloadConfirmations = new Map<string, (allowed: boolean) => void>();
+
+const DOWNLOAD_CONFIRMATION_TIMEOUT_MS = 2 * 60 * 1000;
 
 const START_ON_BOOT_UNSUPPORTED_MESSAGE = 'Start on boot is only available in packaged macOS and Windows apps.';
 export const START_ON_BOOT_WINDOWS_ARG = '--start-on-boot';
@@ -117,8 +134,49 @@ export function initApplicationBridge(): void {
    * and downloads keep happening. initApplicationBridge is called unconditionally, so this
    * policy always applies.
    */
-  installBrowserDownloadPolicy((event) => {
-    ipcBridge.preview.browserDownloadLocal.emit(event);
+  installBrowserDownloadPolicy(
+    (event) => {
+      ipcBridge.preview.browserDownloadLocal.emit(event);
+    },
+    {
+      confirm: (request) =>
+        new Promise<boolean>((resolve) => {
+          // 一次性 settle：超时和用户答复可能同时到，第二次调用必须是空操作。
+          // Settle once: the timeout and the user's answer can race, and the second must be a no-op.
+          let settled = false;
+          const finish = (allowed: boolean) => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            pendingDownloadConfirmations.delete(request.id);
+            resolve(allowed);
+          };
+          const timer = setTimeout(() => finish(false), DOWNLOAD_CONFIRMATION_TIMEOUT_MS);
+          pendingDownloadConfirmations.set(request.id, finish);
+          ipcBridge.preview.browserDownloadConfirmLocal.emit(request);
+        }),
+    }
+  );
+
+  /**
+   * 权限、证书和重定向闸门，和下载策略同理，装在无条件执行的地方。
+   * 之前它们在 startCdpBridge 里，于是关掉 Agent 浏览器控制之后整个 partition 上
+   * 一个权限处理器都没有 —— Electron 的默认是授予。
+   *
+   * Permission, certificate, and redirect gates, installed unconditionally for the same reason as
+   * the download policy. They used to live in startCdpBridge, which meant that switching agent
+   * browser control off left the partition with no permission handler at all — and Electron's
+   * default is to grant.
+   */
+  installBrowserSessionGuards();
+
+  ipcBridge.application.resolveBrowserDownload.provider(async ({ id, allow }) => {
+    const pending = pendingDownloadConfirmations.get(id);
+    // 没有对应项说明已经超时或已经答复过了，直接返回成功：渲染进程无事可做。
+    // No entry means it already timed out or was already answered; report success, since there
+    // is nothing for the renderer to do about it either way.
+    pending?.(allow);
+    return { success: true };
   });
 
   ipcBridge.application.restart.provider(async () => {

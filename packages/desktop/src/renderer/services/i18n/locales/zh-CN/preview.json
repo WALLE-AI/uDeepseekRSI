@@ -126,6 +126,17 @@
     "previousPage": "上一页",
     "nextPage": "下一页",
     "fitWidth": "适合宽度",
+    "goToPage": "跳转到页",
+    "search": {
+      "open": "在文档中搜索",
+      "close": "关闭搜索",
+      "placeholder": "在文档中搜索",
+      "previous": "上一处",
+      "next": "下一处",
+      "searching": "搜索中…",
+      "noResults": "无结果",
+      "count": "{{current}}/{{total}}"
+    },
     "errors": {
       "password": "暂不支持预览受密码保护的 PDF",
       "invalid": "PDF 文件已损坏或格式无效",
@@ -176,7 +187,15 @@
       "completedContent": "{{fileName}} 已保存到下载文件夹。",
       "failedTitle": "下载失败",
       "failedContent": "{{fileName}} 未能下载。",
-      "reveal": "在文件夹中显示"
+      "reveal": "在文件夹中显示",
+      "blockedTitle": "下载已被阻止",
+      "blockedTooLarge": "{{fileName}} 超过下载大小限制，未保存。",
+      "blockedDeclined": "{{fileName}} 未保存。",
+      "confirmTitle": "要保存这个下载吗？",
+      "confirmExecutable": "{{fileName}} 是可执行程序，运行它可能会更改或损坏你的电脑。",
+      "confirmScript": "{{fileName}} 是脚本文件，打开它会在你的电脑上执行命令。",
+      "confirmSave": "保存",
+      "confirmDiscard": "不保存"
     }
   },
   "saveConflict": "保存失败：该文件在你打开后已被改动。可重新加载查看其他改动——你的编辑仍在，尚未保存。",

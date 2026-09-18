@@ -5,7 +5,9 @@
  */
 
 import { randomBytes, randomUUID } from 'node:crypto';
+import fs from 'node:fs';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import path from 'node:path';
 import { session, webContents, type Debugger, type WebContents } from 'electron';
 import { WebSocketServer, type WebSocket } from 'ws';
 import { BROWSER_SESSION_PARTITION } from '../../../common/config/constants';
@@ -16,8 +18,22 @@ import {
   OriginRateLimiter,
   validateBrowserNavigation,
 } from '../../services/browser-control';
-import { classifyBrowserResponse } from '../../services/browser-control/challengeClassifier';
+import {
+  browserDownloadDirectory,
+  ensureUniqueDownloadPath,
+  safeDownloadFileName,
+  type BrowserDownloadEvent,
+} from '../../services/browser-control/browserDownloads';
 import { getManagedBrowserCredentialStore } from '../../services/browser-control/managedCredentialStore';
+import { classifyBrowserResponse } from '../../services/browser-control/policies/challengeClassifier';
+import {
+  DEFAULT_MAX_DOWNLOAD_BYTES,
+  createBrowserDownloadId,
+} from '../../services/browser-control/policies/downloadPolicy';
+import {
+  isMainFramePdfResponse,
+  pdfFileNameFromUrl,
+} from '../../services/browser-control/policies/pdfResponseClassifier';
 import { buildVersionPayload, tokensMatch, type CdpRequest, type TargetInfo } from './cdpTargetProtocol';
 
 const HOST = '127.0.0.1';
@@ -58,6 +74,15 @@ export type CdpBridgeOptions = {
   onTargetControlStateChanged?: (event: BrowserTargetControlStateEvent) => void;
   onTargetActivityChanged?: (event: { tabId: string; targetId: string; active: boolean }) => void;
   targetAttachTimeoutMs?: number;
+  /**
+   * PDF 拦截落盘完成时触发，与 installBrowserDownloadPolicy 的 onEvent 共用同一个
+   * IPC 事件，让「打开 PDF 预览 tab」始终只有一条代码路径。
+   *
+   * Fires when a PDF interception finishes writing to disk. Shares the same IPC event
+   * as installBrowserDownloadPolicy's onEvent, so "open a PDF preview tab" stays a
+   * single code path.
+   */
+  onPdfDownload?: (event: BrowserDownloadEvent) => void;
 };
 
 export type BrowserTargetControlState =
@@ -132,12 +157,54 @@ export const startCdpBridge = async (options: CdpBridgeOptions = {}): Promise<Cd
   const writeQueues = new Map<string, Promise<void>>();
   const agentNavigatingWebContents = new Set<number>();
 
-  // Browser pages cannot grant themselves device, display, notification, or
-  // clipboard permissions. A future user-confirmation flow may selectively
-  // approve them, but Agent/CDP commands never bypass this main-process gate.
-  browserSession.setPermissionCheckHandler(() => false);
-  browserSession.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
+  // Permission, navigation, and certificate gates for this partition are installed by
+  // installBrowserSessionGuards (services/browser-control/sessionGuards.ts) at application
+  // startup, not here. They used to live in this function, which meant they only existed while
+  // agent browser control was enabled — with the feature switched off the partition had no
+  // permission handler at all and Electron's default is to grant. They now hold either way, and
+  // Agent/CDP commands still cannot bypass them.
   const controlState = new Map<string, { state: BrowserTargetControlState; retryAt?: number | null }>();
+  /**
+   * 每个 target 的 PDF 拦截状态：主 frame id（用来判定顶层导航），以及正在等待
+   * loadingFinished 的请求 id/url。见 Fix B 相关分支。
+   *
+   * Per-target PDF interception state: the main frame id (used to recognize a
+   * top-level navigation) and the request id/url currently awaiting
+   * loadingFinished. See the Fix B branches below.
+   */
+  const pdfState = new Map<
+    string,
+    { mainFrameId: string | null; pendingPdfRequestId: string | null; pendingPdfUrl: string }
+  >();
+
+  const handlePdfInterception = async (dbg: Debugger, requestId: string, url: string): Promise<void> => {
+    try {
+      const response = (await dbg.sendCommand('Network.getResponseBody', { requestId })) as {
+        body: string;
+        base64Encoded: boolean;
+      };
+      const buffer = response.base64Encoded ? Buffer.from(response.body, 'base64') : Buffer.from(response.body, 'utf8');
+      if (buffer.byteLength > DEFAULT_MAX_DOWNLOAD_BYTES) return;
+
+      const fileName = safeDownloadFileName(pdfFileNameFromUrl(url));
+      const directory = browserDownloadDirectory();
+      fs.mkdirSync(directory, { recursive: true });
+      const savePath = ensureUniqueDownloadPath(path.join(directory, fileName), (candidate) =>
+        fs.existsSync(candidate)
+      );
+      fs.writeFileSync(savePath, buffer);
+
+      // 此时原生渲染早已注定失败，晚一点 stop 不会有任何损失，反而避免了跟 body 读取抢跑。
+      // The native render is doomed by this point; stopping late costs nothing and avoids
+      // racing the body read.
+      void dbg.sendCommand('Page.stopLoading').catch(() => {});
+
+      options.onPdfDownload?.({ id: createBrowserDownloadId(), state: 'completed', fileName, savePath, isPdf: true });
+    } catch {
+      // 静默放弃：不会比今天「一片空白」更糟。
+      // Silently give up: never worse than today's blank panel.
+    }
+  };
 
   const setControlState = (targetId: string, state: BrowserTargetControlState, retryAt?: number | null): void => {
     controlState.set(targetId, { state, retryAt });
@@ -246,6 +313,7 @@ export const startCdpBridge = async (options: CdpBridgeOptions = {}): Promise<Cd
     coordinator.forgetTarget(removed.targetId);
     agentNavigatingWebContents.delete(removed.webContentsId);
     controlState.delete(removed.targetId);
+    pdfState.delete(removed.targetId);
     const state = attached.get(removed.targetId);
     attached.delete(removed.targetId);
     if (state) {
@@ -307,13 +375,29 @@ export const startCdpBridge = async (options: CdpBridgeOptions = {}): Promise<Cd
       } catch (error) {
         return { ok: false, reason: error instanceof Error ? error.message : String(error) };
       }
+      /**
+       * 主动打开 Network/Page 域，不等外部 CDP 客户端来开。不这样做的话，classify
+       * 挑战/限流和下面的 PDF 拦截都只在有真实 Agent 会话连着、并且它自己发了
+       * enable 的时候才会生效 —— 大多数手动浏览的场景里，这两个域从来没被打开过。
+       *
+       * Proactively enable the Network/Page domains instead of waiting for an external
+       * CDP client to do it. Without this, both the existing challenge/rate-limit
+       * classification and the PDF interception below only ever fire while a real agent
+       * session is attached and has enabled them itself — in most manual browsing, these
+       * domains are never turned on at all.
+       */
+      void dbg.sendCommand('Page.enable').catch(() => {});
+      void dbg.sendCommand('Network.enable').catch(() => {});
+      pdfState.set(record.targetId, { mainFrameId: null, pendingPdfRequestId: null, pendingPdfUrl: '' });
       const onMessage = (_event: unknown, method: string, params: unknown) => {
         if (method === 'Page.frameStoppedLoading') {
           agentNavigatingWebContents.delete(registration.webContentsId);
         }
         if (method === 'Page.frameNavigated') {
-          const event = params as { frame?: { parentId?: string; url?: string } };
+          const event = params as { frame?: { id?: string; parentId?: string; url?: string } };
           if (!event.frame?.parentId) {
+            const pdf = pdfState.get(record.targetId);
+            if (pdf) pdf.mainFrameId = event.frame?.id ?? null;
             const updated = registry.updateDocument(record.targetId, { url: event.frame?.url });
             const updatedInfo = targetInfo(updated);
             if (updatedInfo) {
@@ -350,6 +434,52 @@ export const startCdpBridge = async (options: CdpBridgeOptions = {}): Promise<Cd
               if (current && current !== 'userTakeover') setControlState(record.targetId, 'ready');
             }
           }
+        }
+        /**
+         * Fix B：顶层导航是 PDF 时，原生 PDFium 在 partition+plugins 组合下注定渲染失败
+         * （electron/electron#27121）。等 loadingFinished 而不是在 responseReceived 就动手，
+         * 是为了拿到完整的 body 再读 —— 到那时原生渲染已经无从谈起，晚一点 stop 没有代价。
+         *
+         * Fix B: when the top-level navigation is a PDF, the native PDFium renderer is doomed
+         * to fail under the partition+plugins combination (electron/electron#27121). Acting on
+         * loadingFinished rather than responseReceived ensures the body is complete before it's
+         * read — by then the native render is moot anyway, so acting late costs nothing.
+         */
+        if (method === 'Network.responseReceived') {
+          const event = params as {
+            type?: string;
+            frameId?: string;
+            requestId?: string;
+            response?: { url?: string; mimeType?: string };
+          };
+          const pdf = pdfState.get(record.targetId);
+          if (
+            pdf &&
+            isMainFramePdfResponse({
+              type: event.type,
+              frameId: event.frameId,
+              mainFrameId: pdf.mainFrameId,
+              mimeType: event.response?.mimeType,
+            })
+          ) {
+            pdf.pendingPdfRequestId = event.requestId ?? null;
+            pdf.pendingPdfUrl = event.response?.url ?? '';
+          }
+        }
+        if (method === 'Network.loadingFinished') {
+          const event = params as { requestId?: string };
+          const pdf = pdfState.get(record.targetId);
+          if (pdf?.pendingPdfRequestId && event.requestId === pdf.pendingPdfRequestId) {
+            const requestId = pdf.pendingPdfRequestId;
+            const url = pdf.pendingPdfUrl;
+            pdf.pendingPdfRequestId = null;
+            void handlePdfInterception(dbg, requestId, url);
+          }
+        }
+        if (method === 'Network.loadingFailed') {
+          const event = params as { requestId?: string };
+          const pdf = pdfState.get(record.targetId);
+          if (pdf && pdf.pendingPdfRequestId === event.requestId) pdf.pendingPdfRequestId = null;
         }
         for (const connection of connections) {
           const sessionId = connection.sessionByTarget.get(record.targetId);

@@ -126,6 +126,17 @@
     "previousPage": "Página anterior",
     "nextPage": "Próxima página",
     "fitWidth": "Ajustar à largura",
+    "goToPage": "Ir para a página",
+    "search": {
+      "open": "Pesquisar no documento",
+      "close": "Fechar pesquisa",
+      "placeholder": "Pesquisar no documento",
+      "previous": "Ocorrência anterior",
+      "next": "Próxima ocorrência",
+      "searching": "Pesquisando…",
+      "noResults": "Nenhum resultado",
+      "count": "{{current}}/{{total}}"
+    },
     "errors": {
       "password": "PDFs protegidos por senha ainda não são compatíveis",
       "invalid": "Este PDF está danificado ou é inválido",
@@ -176,7 +187,15 @@
       "completedContent": "{{fileName}} foi salvo na sua pasta Downloads.",
       "failedTitle": "Falha no download",
       "failedContent": "{{fileName}} não foi baixado.",
-      "reveal": "Mostrar na pasta"
+      "reveal": "Mostrar na pasta",
+      "blockedTitle": "Download bloqueado",
+      "blockedTooLarge": "{{fileName}} excede o limite de download e não foi salvo.",
+      "blockedDeclined": "{{fileName}} não foi salvo.",
+      "confirmTitle": "Salvar este download?",
+      "confirmExecutable": "{{fileName}} é um programa. Executá-lo pode alterar ou danificar seu computador.",
+      "confirmScript": "{{fileName}} é um script. Abri-lo executa comandos no seu computador.",
+      "confirmSave": "Salvar",
+      "confirmDiscard": "Não salvar"
     }
   },
   "saveConflict": "Não foi possível salvar: este arquivo mudou no disco depois que você o abriu. Recarregue para ver as outras alterações — suas edições continuam aqui, não salvas.",

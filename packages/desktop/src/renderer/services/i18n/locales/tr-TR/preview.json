@@ -126,6 +126,17 @@
     "previousPage": "Önceki sayfa",
     "nextPage": "Sonraki sayfa",
     "fitWidth": "Genişliğe sığdır",
+    "goToPage": "Sayfaya git",
+    "search": {
+      "open": "Belgede ara",
+      "close": "Aramayı kapat",
+      "placeholder": "Belgede ara",
+      "previous": "Önceki eşleşme",
+      "next": "Sonraki eşleşme",
+      "searching": "Aranıyor…",
+      "noResults": "Sonuç yok",
+      "count": "{{current}}/{{total}}"
+    },
     "errors": {
       "password": "Parola korumalı PDF'ler henüz desteklenmiyor",
       "invalid": "Bu PDF hasarlı veya geçersiz",
@@ -176,7 +187,15 @@
       "completedContent": "{{fileName}} İndirilenler klasörünüze kaydedildi.",
       "failedTitle": "İndirme başarısız",
       "failedContent": "{{fileName}} indirilemedi.",
-      "reveal": "Klasörde göster"
+      "reveal": "Klasörde göster",
+      "blockedTitle": "İndirme engellendi",
+      "blockedTooLarge": "{{fileName}} indirme sınırını aşıyor ve kaydedilmedi.",
+      "blockedDeclined": "{{fileName}} kaydedilmedi.",
+      "confirmTitle": "Bu indirme kaydedilsin mi?",
+      "confirmExecutable": "{{fileName}} bir programdır. Çalıştırmak bilgisayarınızı değiştirebilir veya ona zarar verebilir.",
+      "confirmScript": "{{fileName}} bir betiktir. Açmak bilgisayarınızda komutlar çalıştırır.",
+      "confirmSave": "Kaydet",
+      "confirmDiscard": "Kaydetme"
     }
   },
   "saveConflict": "Kaydedilemedi: bu dosya siz açtıktan sonra diskte değişti. Diğer değişiklikleri görmek için yeniden yükleyin — düzenlemeleriniz kaydedilmemiş olarak duruyor.",

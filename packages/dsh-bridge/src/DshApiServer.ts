@@ -754,6 +754,7 @@ function mimeType(path: string): string {
         '.js': 'text/javascript',
         '.ts': 'text/typescript',
         '.md': 'text/markdown',
+        '.pdf': 'application/pdf',
       } as Record<string, string>
     )[extension] ?? 'application/octet-stream'
   );
@@ -3235,6 +3236,31 @@ export class DshApiServer {
         else if (encoding === 'dataurl')
           responseData(response, `data:${mimeType(filePath)};base64,${data.toString('base64')}`);
         else responseData(response, data.toString('utf8'));
+        return;
+      }
+      if (path === '/api/fs/stream' && (method === 'GET' || method === 'HEAD')) {
+        // Raw-byte counterpart to /api/fs/content: pdf.js and other binary
+        // consumers fetch this URL directly rather than going through the
+        // JSON-wrapped, base64-encoded POST endpoint.
+        const kind = url.searchParams.get('kind');
+        const filePath =
+          kind === 'project'
+            ? await resolveProjectPath(
+                this.#state.projects,
+                projectFileRef({
+                  pe_id: url.searchParams.get('pe_id'),
+                  relative_path: url.searchParams.get('relative_path'),
+                })
+              )
+            : await this.#registeredPath(url.searchParams.get('path') ?? '');
+        const metadata = await stat(filePath);
+        if (!metadata.isFile()) throw new Error('FILE_NOT_FOUND');
+        response.writeHead(200, {
+          'Content-Type': mimeType(filePath),
+          'Content-Length': String(metadata.size),
+          'Cache-Control': 'no-store',
+        });
+        response.end(method === 'HEAD' ? undefined : await readFile(filePath));
         return;
       }
       if (path === '/api/fs/content/metadata' && method === 'POST') {

@@ -126,6 +126,17 @@
     "previousPage": "Vorherige Seite",
     "nextPage": "Nächste Seite",
     "fitWidth": "An Breite anpassen",
+    "goToPage": "Zu Seite springen",
+    "search": {
+      "open": "Im Dokument suchen",
+      "close": "Suche schließen",
+      "placeholder": "Im Dokument suchen",
+      "previous": "Vorheriger Treffer",
+      "next": "Nächster Treffer",
+      "searching": "Wird gesucht…",
+      "noResults": "Keine Treffer",
+      "count": "{{current}}/{{total}}"
+    },
     "errors": {
       "password": "Passwortgeschützte PDFs werden noch nicht unterstützt",
       "invalid": "Diese PDF-Datei ist beschädigt oder ungültig",
@@ -176,7 +187,15 @@
       "completedContent": "{{fileName}} wurde in Ihrem Download-Ordner gespeichert.",
       "failedTitle": "Download fehlgeschlagen",
       "failedContent": "{{fileName}} wurde nicht heruntergeladen.",
-      "reveal": "Im Ordner anzeigen"
+      "reveal": "Im Ordner anzeigen",
+      "blockedTitle": "Download blockiert",
+      "blockedTooLarge": "{{fileName}} überschreitet das Download-Limit und wurde nicht gespeichert.",
+      "blockedDeclined": "{{fileName}} wurde nicht gespeichert.",
+      "confirmTitle": "Diesen Download speichern?",
+      "confirmExecutable": "{{fileName}} ist ein Programm. Es auszuführen kann Ihren Computer verändern oder beschädigen.",
+      "confirmScript": "{{fileName}} ist ein Skript. Es zu öffnen führt Befehle auf Ihrem Computer aus.",
+      "confirmSave": "Speichern",
+      "confirmDiscard": "Nicht speichern"
     }
   },
   "saveConflict": "Speichern fehlgeschlagen: Diese Datei wurde auf der Festplatte geändert, nachdem Sie sie geöffnet haben. Neu laden, um die anderen Änderungen zu sehen — Ihre Bearbeitungen sind noch da, ungespeichert.",

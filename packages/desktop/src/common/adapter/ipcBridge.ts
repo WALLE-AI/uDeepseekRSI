@@ -774,6 +774,21 @@ export const application = {
     'app.reveal-browser-download'
   ),
   /**
+   * 把用户对一次下载确认的答复送回主进程。
+   *
+   * 和 browserDownloadConfirmLocal 成对使用：主进程把下载暂停在那里等这个答复，超时则按
+   * 拒绝处理 —— 渲染进程崩了或窗口关了的时候，一个永远暂停的下载不能变成一个泄漏的
+   * DownloadItem。
+   *
+   * Carry the user's answer to a download confirmation back to the main process. Paired with
+   * browserDownloadConfirmLocal: the main process holds the download paused awaiting this
+   * answer and treats a timeout as a refusal, so that a crashed renderer or a closed window
+   * cannot turn a paused download into a leaked DownloadItem.
+   */
+  resolveBrowserDownload: bridge.buildProvider<IBridgeResponse<void>, { id: string; allow: boolean }>(
+    'app.resolve-browser-download'
+  ),
+  /**
    * 渲染进程把侧边浏览器 webview 的 webContents id 报给主进程，用于把单目标 CDP 通道
    * 附加到它。
    *
@@ -1575,10 +1590,34 @@ export const preview = {
    * instead of letting it vanish silently.
    */
   browserDownloadLocal: bridge.buildEmitter<{
-    state: 'completed' | 'cancelled' | 'interrupted';
+    /** 一次下载在整个生命周期内的稳定 id / The download's stable id for its whole lifetime. */
+    id: string;
+    state: 'completed' | 'cancelled' | 'interrupted' | 'blocked';
     fileName: string;
     savePath?: string;
+    /** state 为 blocked 时说明被挡的原因 / Why it was blocked, when state is `blocked`. */
+    reason?: 'executable' | 'script' | 'tooLarge' | 'declined';
+    /** 仅 completed 时有值：这个下载是不是 PDF / Present only when completed: whether this download is a PDF. */
+    isPdf?: boolean;
   }>('preview.browser-download-local'),
+  /**
+   * 一次下载需要用户点头。
+   *
+   * 为什么要走这一趟往返，而不是在主进程弹 dialog.showMessageBox：主进程没有 i18n，
+   * 那条路径只能给出英文文案；而且原生模态框会挂住整个窗口，包括正在跑的对话。渲染进程
+   * 用 Arco Modal 提问，答案通过 resolveBrowserDownload 回到主进程，靠 id 对上号。
+   *
+   * A download needs the user's approval. This round trip exists instead of a
+   * `dialog.showMessageBox` in the main process because the main process has no i18n — that path
+   * could only produce English — and because a native modal wedges the entire window, ongoing
+   * conversation included. The renderer asks with an Arco Modal and the answer returns through
+   * resolveBrowserDownload, matched up by id.
+   */
+  browserDownloadConfirmLocal: bridge.buildEmitter<{
+    id: string;
+    fileName: string;
+    reason: 'executable' | 'script';
+  }>('preview.browser-download-confirm-local'),
 };
 
 // ---------------------------------------------------------------------------

@@ -795,6 +795,9 @@ const handleAppReady = async (): Promise<void> => {
         onTargetActivityChanged: (event) => {
           ipcBridge.preview.browserControlActivityLocal.emit(event);
         },
+        onPdfDownload: (event) => {
+          ipcBridge.preview.browserDownloadLocal.emit(event);
+        },
       });
       setCdpBridgeHandle(bridge);
       /**

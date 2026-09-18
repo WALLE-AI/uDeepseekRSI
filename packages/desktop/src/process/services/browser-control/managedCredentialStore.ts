@@ -8,7 +8,7 @@ import { randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { app, safeStorage } from 'electron';
-import { mayInjectManagedCredential } from './actionPolicy';
+import { mayInjectManagedCredential } from './policies/actionPolicy';
 
 export type ManagedBrowserCredentialSummary = { id: string; origin: string; clientId: string };
 type StoredCredential = ManagedBrowserCredentialSummary & { encryptedSecret: string };

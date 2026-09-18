@@ -126,6 +126,17 @@
     "previousPage": "Página anterior",
     "nextPage": "Página siguiente",
     "fitWidth": "Ajustar al ancho",
+    "goToPage": "Ir a la página",
+    "search": {
+      "open": "Buscar en el documento",
+      "close": "Cerrar búsqueda",
+      "placeholder": "Buscar en el documento",
+      "previous": "Coincidencia anterior",
+      "next": "Coincidencia siguiente",
+      "searching": "Buscando…",
+      "noResults": "Sin resultados",
+      "count": "{{current}}/{{total}}"
+    },
     "errors": {
       "password": "Aún no se admiten archivos PDF protegidos con contraseña",
       "invalid": "Este PDF está dañado o no es válido",
@@ -176,7 +187,15 @@
       "completedContent": "{{fileName}} se guardó en tu carpeta de Descargas.",
       "failedTitle": "Error de descarga",
       "failedContent": "{{fileName}} no se descargó.",
-      "reveal": "Mostrar en la carpeta"
+      "reveal": "Mostrar en la carpeta",
+      "blockedTitle": "Descarga bloqueada",
+      "blockedTooLarge": "{{fileName}} supera el límite de descarga y no se ha guardado.",
+      "blockedDeclined": "{{fileName}} no se ha guardado.",
+      "confirmTitle": "¿Guardar esta descarga?",
+      "confirmExecutable": "{{fileName}} es un programa. Ejecutarlo puede modificar o dañar tu equipo.",
+      "confirmScript": "{{fileName}} es un script. Abrirlo ejecuta comandos en tu equipo.",
+      "confirmSave": "Guardar",
+      "confirmDiscard": "No guardar"
     }
   },
   "saveConflict": "No se pudo guardar: este archivo cambió en el disco después de que lo abrieras. Vuelve a cargarlo para ver los otros cambios; tus ediciones siguen aquí, sin guardar.",

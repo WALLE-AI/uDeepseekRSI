@@ -126,6 +126,17 @@
     "previousPage": "Previous page",
     "nextPage": "Next page",
     "fitWidth": "Fit width",
+    "goToPage": "Go to page",
+    "search": {
+      "open": "Search in document",
+      "close": "Close search",
+      "placeholder": "Search in document",
+      "previous": "Previous match",
+      "next": "Next match",
+      "searching": "Searching…",
+      "noResults": "No results",
+      "count": "{{current}}/{{total}}"
+    },
     "errors": {
       "password": "Password-protected PDFs are not supported yet",
       "invalid": "This PDF is damaged or invalid",
@@ -176,7 +187,15 @@
       "completedContent": "{{fileName}} was saved to your Downloads folder.",
       "failedTitle": "Download failed",
       "failedContent": "{{fileName}} was not downloaded.",
-      "reveal": "Show in folder"
+      "reveal": "Show in folder",
+      "blockedTitle": "Download blocked",
+      "blockedTooLarge": "{{fileName}} is larger than the download limit and was not saved.",
+      "blockedDeclined": "{{fileName}} was not saved.",
+      "confirmTitle": "Save this download?",
+      "confirmExecutable": "{{fileName}} is a program. Running it can change or damage your computer.",
+      "confirmScript": "{{fileName}} is a script. Opening it runs commands on your computer.",
+      "confirmSave": "Save",
+      "confirmDiscard": "Don't save"
     }
   },
   "saveConflict": "Could not save: this file changed on disk since you opened it. Reload to see the other changes — your edits are still here, unsaved.",

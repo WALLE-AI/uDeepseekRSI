@@ -126,6 +126,17 @@
     "previousPage": "前のページ",
     "nextPage": "次のページ",
     "fitWidth": "幅に合わせる",
+    "goToPage": "ページへ移動",
+    "search": {
+      "open": "ドキュメント内を検索",
+      "close": "検索を閉じる",
+      "placeholder": "ドキュメント内を検索",
+      "previous": "前の一致",
+      "next": "次の一致",
+      "searching": "検索中…",
+      "noResults": "結果なし",
+      "count": "{{current}}/{{total}}"
+    },
     "errors": {
       "password": "パスワード保護された PDF はまだ表示できません",
       "invalid": "PDF が破損しているか無効です",
@@ -176,7 +187,15 @@
       "completedContent": "{{fileName}} をダウンロードフォルダーに保存しました。",
       "failedTitle": "ダウンロード失敗",
       "failedContent": "{{fileName}} をダウンロードできませんでした。",
-      "reveal": "フォルダーに表示"
+      "reveal": "フォルダーに表示",
+      "blockedTitle": "ダウンロードをブロックしました",
+      "blockedTooLarge": "{{fileName}} はダウンロードの上限を超えているため保存されませんでした。",
+      "blockedDeclined": "{{fileName}} は保存されませんでした。",
+      "confirmTitle": "このダウンロードを保存しますか？",
+      "confirmExecutable": "{{fileName}} はプログラムです。実行するとコンピューターが変更されたり、損傷したりする可能性があります。",
+      "confirmScript": "{{fileName}} はスクリプトです。開くとコンピューター上でコマンドが実行されます。",
+      "confirmSave": "保存",
+      "confirmDiscard": "保存しない"
     }
   },
   "saveConflict": "保存できませんでした：このファイルは開いた後に変更されています。再読み込みで他の変更を確認できます——あなたの編集は未保存のまま残っています。",

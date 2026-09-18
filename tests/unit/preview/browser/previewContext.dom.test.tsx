@@ -19,14 +19,25 @@ import React from 'react';
 import { act, render } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+type BrowserDownloadLocalEvent = {
+  id: string;
+  state: 'completed' | 'cancelled' | 'interrupted' | 'blocked';
+  fileName: string;
+  savePath?: string;
+  reason?: 'executable' | 'script' | 'tooLarge' | 'declined';
+  isPdf?: boolean;
+};
+
 const bridgeListeners = vi.hoisted(() => ({
   openLocal: null as null | ((data: { content: string; content_type: 'browser' }) => void),
   browserActivity: null as null | ((event: { tabId: string; targetId: string; active: boolean }) => void),
   workspaceChanged: null as null | ((data: { session_id: string; changed_paths: string[] }) => void),
+  browserDownload: null as null | ((event: BrowserDownloadLocalEvent) => void),
 }));
 
 const startWorkspacePreview = vi.hoisted(() => vi.fn());
 const stopWorkspacePreview = vi.hoisted(() => vi.fn());
+const notifyBrowserDownload = vi.hoisted(() => vi.fn());
 
 vi.mock('@/common', () => ({
   ipcBridge: {
@@ -43,6 +54,12 @@ vi.mock('@/common', () => ({
         on: (listener: NonNullable<typeof bridgeListeners.browserActivity>) => {
           bridgeListeners.browserActivity = listener;
           return () => (bridgeListeners.browserActivity = null);
+        },
+      },
+      browserDownloadLocal: {
+        on: (listener: NonNullable<typeof bridgeListeners.browserDownload>) => {
+          bridgeListeners.browserDownload = listener;
+          return () => (bridgeListeners.browserDownload = null);
         },
       },
     },
@@ -62,6 +79,11 @@ vi.mock('@/common', () => ({
 
 vi.mock('@/renderer/pages/conversation/Preview/browser/firstUseNotice', () => ({
   maybeNotifyFirstAgentBrowserUse: vi.fn(),
+}));
+
+vi.mock('@/renderer/pages/conversation/Preview/browser/downloadNotice', () => ({
+  notifyBrowserDownload,
+  confirmBrowserDownload: vi.fn(),
 }));
 
 import {
@@ -92,6 +114,8 @@ beforeEach(() => {
   bridgeListeners.openLocal = null;
   bridgeListeners.browserActivity = null;
   bridgeListeners.workspaceChanged = null;
+  bridgeListeners.browserDownload = null;
+  notifyBrowserDownload.mockReset();
   startWorkspacePreview.mockReset().mockResolvedValue({
     session_id: 'preview-session',
     url: 'http://127.0.0.1:9527/api/workspace-preview/content/token/index.html',
@@ -468,5 +492,65 @@ describe('PreviewContext updateTab', () => {
     act(() => ctx.updateTab(tabId, { content: '' }));
 
     expect(browserTabs()[0].content).toBe('');
+  });
+});
+
+describe('PreviewContext browser download', () => {
+  const pdfTabs = () => ctx.tabs.filter((tab) => tab.content_type === 'pdf');
+
+  it('opens a PDF preview tab for a completed PDF download instead of only toasting', () => {
+    renderProvider();
+
+    act(() =>
+      bridgeListeners.browserDownload?.({
+        id: 'dl-1',
+        state: 'completed',
+        fileName: 'report.pdf',
+        savePath: '/downloads/AionUi/report.pdf',
+        isPdf: true,
+      })
+    );
+
+    expect(pdfTabs()).toHaveLength(1);
+    expect(pdfTabs()[0].metadata?.fileRef).toEqual({ kind: 'local', path: '/downloads/AionUi/report.pdf' });
+    expect(pdfTabs()[0].metadata?.file_name).toBe('report.pdf');
+    expect(ctx.activeTabId).toBe(pdfTabs()[0].id);
+    // 打开的 tab 本身就是反馈，不再需要额外的 toast
+    // The opened tab is itself the feedback; no extra toast is needed.
+    expect(notifyBrowserDownload).not.toHaveBeenCalled();
+  });
+
+  it('falls back to the toast for a non-PDF download', () => {
+    renderProvider();
+
+    act(() =>
+      bridgeListeners.browserDownload?.({
+        id: 'dl-2',
+        state: 'completed',
+        fileName: 'archive.zip',
+        savePath: '/downloads/AionUi/archive.zip',
+      })
+    );
+
+    expect(pdfTabs()).toHaveLength(0);
+    expect(notifyBrowserDownload).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'dl-2', fileName: 'archive.zip' })
+    );
+  });
+
+  it('falls back to the toast for a blocked PDF download, since there is nothing to open', () => {
+    renderProvider();
+
+    act(() =>
+      bridgeListeners.browserDownload?.({
+        id: 'dl-3',
+        state: 'blocked',
+        fileName: 'invoice.pdf',
+        reason: 'tooLarge',
+      })
+    );
+
+    expect(pdfTabs()).toHaveLength(0);
+    expect(notifyBrowserDownload).toHaveBeenCalled();
   });
 });
