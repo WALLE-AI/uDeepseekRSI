@@ -1,5 +1,21 @@
 # Changelog
 
+## [2.2.5](https://github.com/WALLE-AI/uDeepseekRSI/compare/v2.2.4...v2.2.5) (2026-09-22)
+
+### Desktop
+
+#### Features
+
+- **browser:** optimize built-in browser MCP tool surface and agent guidance
+
+#### Bug Fixes
+
+- **preview:** downgrade pdfjs-dist to fix PDF preview load failure
+- **preview:** fix PDF preview problem
+- **dsh:** persist the context usage snapshot across conversation switches
+
+---
+
 ## [2.2.4](https://github.com/WALLE-AI/uDeepseekRSI/compare/v2.2.3...v2.2.4) (2026-09-13)
 
 ### Desktop
