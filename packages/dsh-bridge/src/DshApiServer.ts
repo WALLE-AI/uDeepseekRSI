@@ -43,6 +43,7 @@ import {
 import { augmentUsagePayload, parseToolCallEnvelope, parseUsagePayload, projectUsageSnapshot } from './updateMapper';
 import {
   assistantIdForWorkMode,
+  browserToolsMounted,
   DSH_WORK_MODES,
   DshRuntimePool,
   modeRuntimeKey,
@@ -303,6 +304,20 @@ export type DshApiServerOptions = {
   patchPaths?: string[];
   env?: NodeJS.ProcessEnv;
   mcpServers?: readonly DshMcpServer[];
+  /**
+   * 内置浏览器 MCP 的注册名，由宿主给出。
+   *
+   * 宿主（desktop）才知道自己注入的是不是浏览器 MCP，也才持有那个共享常量。在这里写死
+   * 一份字面量会重新引入常量注释里警告过的漂移 —— 而漂移的表现是 persona 里少一段，
+   * 没有任何报错。给名字而不是布尔值，是因为它还要跟 `mcpServers` 对得上才算数。
+   *
+   * Registered name of the built-in browser MCP, supplied by the host. Only the host (desktop)
+   * knows whether what it injected is the browser MCP, and only it holds the shared constant;
+   * hardcoding a second literal here would reintroduce exactly the drift that constant's comment
+   * warns about, and drift here silently drops a persona section with no error. A name rather
+   * than a boolean, because it only counts when it also matches an entry in `mcpServers`.
+   */
+  builtinBrowserMcpName?: string;
   desktopShell?: DesktopShellPort;
   officePreviewPort?: OfficePreviewPort;
   credentialStore?: ProviderCredentialStore;
@@ -890,6 +905,7 @@ export class DshApiServer {
       skillsDir: this.#skillsDir(),
       sharedExpertSkillDirs: this.#expertSkillDirs,
       modeDelegates,
+      browserToolsAvailable: browserToolsMounted(this.#options.mcpServers, this.#options.builtinBrowserMcpName),
     });
     this.#runtimeProfiles.set(keyId, { profile, catalogRevision: this.#state.catalogRevision });
     return profile;

@@ -21,16 +21,24 @@ export type BrowserTargetRecord = {
   documentRevision: number;
 };
 
+/**
+ * 前缀既是给模型看的分类，也是遥测的 join key，所以只能在这里定义一次。
+ * The prefix is both the model's classification and telemetry's join key, so it is defined once here.
+ */
 export type BrowserControlErrorCode =
   | 'NO_TARGET'
   | 'TARGET_BUSY'
   | 'TARGET_CLOSED'
+  | 'TARGET_CREATE_TIMEOUT'
   | 'STALE_ELEMENT'
   | 'USER_TOOK_CONTROL'
   | 'CHALLENGE_REQUIRED'
   | 'CHALLENGE_IN_PROGRESS'
   | 'RATE_LIMITED'
   | 'AUTHENTICATION_REQUIRED'
+  | 'ACCESS_DENIED'
+  | 'CAPABILITY_BLOCKED'
+  | 'SENSITIVE_READ_BLOCKED'
   | 'NAVIGATION_BLOCKED';
 
 export type BrowserControlResult<T> =

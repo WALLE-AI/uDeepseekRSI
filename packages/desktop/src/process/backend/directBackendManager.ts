@@ -81,6 +81,7 @@ export class DirectBackendManager {
       patchPaths,
       env: process.env,
       mcpServers,
+      builtinBrowserMcpName: BUILTIN_BROWSER_MCP_NAME,
       desktopShell: createDesktopShell(),
       credentialStore: new SafeStorageProviderCredentialStore(join(dataDir, 'provider-credentials.json')),
       authToken,

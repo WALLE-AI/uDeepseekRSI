@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { capabilityBlockedError } from '../agentErrors';
 import type { BrowserControlResult } from '../types';
 import { evaluateNetworkTarget } from './networkPolicy';
 
@@ -58,6 +59,4 @@ const BLOCKED_CDP_METHODS = new Set([
  * flow are unavailable through the raw target bridge.
  */
 export const blockedCdpCapability = (method: string): string | null =>
-  BLOCKED_CDP_METHODS.has(method)
-    ? `${method} requires an explicit user-confirmed AionUi workflow and is not available to Agent control.`
-    : null;
+  BLOCKED_CDP_METHODS.has(method) ? capabilityBlockedError(method) : null;

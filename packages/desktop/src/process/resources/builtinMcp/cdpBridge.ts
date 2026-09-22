@@ -15,7 +15,17 @@ import {
   BrowserControlCoordinator,
   BrowserTargetRegistry,
   blockedCdpCapability,
+  challengeReadBlockedError,
+  navigationBlockedError,
+  noBrowserTargetError,
   OriginRateLimiter,
+  pausedWriteError,
+  rateLimitedNavigationError,
+  sensitiveReadBlockedError,
+  targetCreateTimeoutError,
+  targetCreateUnavailableError,
+  unknownTargetError,
+  unsupportedBrowserCommandError,
   validateBrowserNavigation,
 } from '../../services/browser-control';
 import {
@@ -145,7 +155,27 @@ const writeJson = (res: ServerResponse, body: unknown): void => {
 
 export const startCdpBridge = async (options: CdpBridgeOptions = {}): Promise<CdpBridgeHandle> => {
   const token = randomBytes(24).toString('hex');
-  const timeoutMs = options.targetAttachTimeoutMs ?? 5_000;
+  /**
+   * 等一个新标签挂上来的窗口。
+   *
+   * 这条路不是一次 IPC 往返就完事：主进程发 openLocal -> 渲染进程建 tab -> 挂载 webview ->
+   * webview 拿到 webContentsId -> 再 invoke 回来注册。冷启动时渲染进程还在忙，5s 经常不够。
+   *
+   * 超时的代价不是「没开成」—— 标签通常随后还是会出现，只是 Agent 已经收到了失败，于是
+   * 可能再调一次 new_page，屏幕上多出一个空白页。把窗口放宽到 10s 换掉的正是这种幻影标签。
+   * 真失败（渲染进程压根没建）很罕见，多等 5s 可以接受。
+   *
+   * How long to wait for a new tab to attach. This is not a single IPC round trip: the main
+   * process emits openLocal, the renderer creates the tab, mounts the webview, reads its
+   * webContentsId, and only then invokes back to register. During a cold start the renderer is
+   * still busy and 5s often is not enough.
+   *
+   * Timing out does not mean the tab never opened — it usually shows up moments later, but the
+   * agent already has a failure and may call new_page again, leaving a phantom blank tab on the
+   * user's screen. Widening the window to 10s buys away exactly that. A genuine failure (the
+   * renderer never created it) is rare, so the extra 5s costs little.
+   */
+  const timeoutMs = options.targetAttachTimeoutMs ?? 10_000;
   const browserSession = session.fromPartition(BROWSER_SESSION_PARTITION);
   const registry = new BrowserTargetRegistry(() => `aionui-browser-${randomUUID()}`);
   const coordinator = new BrowserControlCoordinator();
@@ -220,7 +250,7 @@ export const startCdpBridge = async (options: CdpBridgeOptions = {}): Promise<Cd
       setControlState(targetId, 'ready');
       return null;
     }
-    return `Browser write commands are paused: ${current.state}.`;
+    return pausedWriteError(current.state, current.retryAt);
   };
 
   const blockedSensitiveReadReason = (targetId: string, method: string): string | null => {
@@ -230,7 +260,7 @@ export const startCdpBridge = async (options: CdpBridgeOptions = {}): Promise<Cd
       method === 'Storage.getCookies' ||
       method === 'Network.getRequestPostData'
     ) {
-      return 'Sensitive browser credentials and submitted form data are not available to Agent control.';
+      return sensitiveReadBlockedError();
     }
     const state = controlState.get(targetId)?.state;
     if (state !== 'challengeRequired' && state !== 'authenticationRequired') return null;
@@ -241,7 +271,7 @@ export const startCdpBridge = async (options: CdpBridgeOptions = {}): Promise<Cd
       method === 'Network.getResponseBody' ||
       method === 'Page.captureScreenshot'
     ) {
-      return `CHALLENGE_REQUIRED: ${state}. Complete the verification in the Browser tab.`;
+      return challengeReadBlockedError(state);
     }
     return null;
   };
@@ -565,7 +595,7 @@ export const startCdpBridge = async (options: CdpBridgeOptions = {}): Promise<Cd
     if (method === 'Target.getTargetInfo') {
       const requested = typeof params.targetId === 'string' ? params.targetId : registry.list()[0]?.targetId;
       const info = requested ? targetInfo(registry.get(requested)) : null;
-      if (!info) sendError(connection.ws, id, 'No such browser target.', sessionId);
+      if (!info) sendError(connection.ws, id, unknownTargetError(requested ?? ''), sessionId);
       else reply({ targetInfo: info });
       return;
     }
@@ -576,7 +606,7 @@ export const startCdpBridge = async (options: CdpBridgeOptions = {}): Promise<Cd
     if (method === 'Target.attachToTarget') {
       const targetId = typeof params.targetId === 'string' ? params.targetId : '';
       const routedSession = registry.get(targetId) ? emitAttached(connection, targetId) : null;
-      if (!routedSession) sendError(connection.ws, id, `No such target id: ${targetId}`, sessionId);
+      if (!routedSession) sendError(connection.ws, id, unknownTargetError(targetId), sessionId);
       else reply({ sessionId: routedSession });
       return;
     }
@@ -592,25 +622,25 @@ export const startCdpBridge = async (options: CdpBridgeOptions = {}): Promise<Cd
       const url = typeof params.url === 'string' ? params.url : 'about:blank';
       const policy = validateBrowserNavigation(url);
       if (policy.ok === false) {
-        sendError(connection.ws, id, policy.message, sessionId);
+        sendError(connection.ws, id, navigationBlockedError(policy.message), sessionId);
         return;
       }
       const requestId = randomUUID();
       if (!options.onCreateTarget) {
-        sendError(connection.ws, id, 'Creating Browser tabs is not available.', sessionId);
+        sendError(connection.ws, id, targetCreateUnavailableError(), sessionId);
         return;
       }
       const waiting = waitForCreatedTarget(requestId);
       await options.onCreateTarget({ requestId, url: policy.data.href });
       const targetId = await waiting;
-      if (!targetId) sendError(connection.ws, id, 'Timed out while creating the Browser tab.', sessionId);
+      if (!targetId) sendError(connection.ws, id, targetCreateTimeoutError(), sessionId);
       else reply({ targetId });
       return;
     }
     if (method === 'Target.activateTarget') {
       const targetId = typeof params.targetId === 'string' ? params.targetId : '';
       const target = registry.get(targetId);
-      if (!target) sendError(connection.ws, id, `No such target id: ${targetId}`, sessionId);
+      if (!target) sendError(connection.ws, id, unknownTargetError(targetId), sessionId);
       else {
         await options.onActivateTarget?.({ tabId: target.tabId, targetId, requestId: randomUUID() });
         reply();
@@ -620,7 +650,7 @@ export const startCdpBridge = async (options: CdpBridgeOptions = {}): Promise<Cd
     if (method === 'Target.closeTarget') {
       const targetId = typeof params.targetId === 'string' ? params.targetId : '';
       const target = registry.get(targetId);
-      if (!target) sendError(connection.ws, id, `No such target id: ${targetId}`, sessionId);
+      if (!target) sendError(connection.ws, id, unknownTargetError(targetId), sessionId);
       else {
         await options.onCloseTarget?.({ tabId: target.tabId, targetId, requestId: randomUUID() });
         reply({ success: true });
@@ -632,14 +662,14 @@ export const startCdpBridge = async (options: CdpBridgeOptions = {}): Promise<Cd
       method === 'Target.disposeBrowserContext' ||
       method === 'Browser.close'
     ) {
-      sendError(connection.ws, id, `${method} is not permitted against the in-app browser.`, sessionId);
+      sendError(connection.ws, id, unsupportedBrowserCommandError(method), sessionId);
       return;
     }
 
     const targetId = sessionId ? connection.sessions.get(sessionId) : undefined;
     const state = targetId ? attached.get(targetId) : undefined;
     if (!state || state.contents.isDestroyed()) {
-      sendError(connection.ws, id, 'No Browser target is attached for this command.', sessionId);
+      sendError(connection.ws, id, noBrowserTargetError(), sessionId);
       return;
     }
     const capabilityBlock = blockedCdpCapability(method);
@@ -657,12 +687,12 @@ export const startCdpBridge = async (options: CdpBridgeOptions = {}): Promise<Cd
       const requestedUrl = typeof params.url === 'string' ? params.url : '';
       const policy = validateBrowserNavigation(requestedUrl);
       if (policy.ok === false) {
-        sendError(connection.ws, id, policy.message, sessionId);
+        sendError(connection.ws, id, navigationBlockedError(policy.message), sessionId);
         return;
       }
       const retryAt = rateLimiter.blockedUntil(policy.data.href);
       if (retryAt) {
-        sendError(connection.ws, id, `RATE_LIMITED: retry after ${new Date(retryAt).toISOString()}`, sessionId);
+        sendError(connection.ws, id, rateLimitedNavigationError(retryAt), sessionId);
         return;
       }
       agentNavigatingWebContents.add(state.contents.id);
@@ -678,21 +708,13 @@ export const startCdpBridge = async (options: CdpBridgeOptions = {}): Promise<Cd
       return;
     }
     const execute = async (): Promise<void> => {
-      const actionKey = `${connection.id}:${id ?? 'event'}:${method}`;
-      const cached = isWriteCommand(method) ? coordinator.cachedAction<Record<string, unknown>>(actionKey) : undefined;
-      if (cached) {
-        reply(cached);
-        return;
-      }
       try {
         const target = targetId ? registry.get(targetId) : null;
         if (target && isWriteCommand(method)) {
           options.onTargetActivityChanged?.({ tabId: target.tabId, targetId: target.targetId, active: true });
         }
         const result = (await state.dbg.sendCommand(method, params)) ?? {};
-        const normalized = result as Record<string, unknown>;
-        if (isWriteCommand(method)) coordinator.rememberAction(actionKey, normalized);
-        reply(normalized);
+        reply(result as Record<string, unknown>);
       } catch (error) {
         sendError(connection.ws, id, error instanceof Error ? error.message : String(error), sessionId);
       } finally {

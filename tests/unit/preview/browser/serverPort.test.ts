@@ -111,6 +111,44 @@ describe('buildMcpSpawnCommand', () => {
     );
   });
 
+  it('turns off the tool categories that carry no value for browsing', () => {
+    // 这三类贡献 6 个前端性能调优工具（take_heapsnapshot / performance_* / emulate /
+    // resize_page）。它们每次会话都要占上下文，而且多数在自研 CDP 伪装层上跑不通。
+    //
+    // These three contribute six front-end performance tools. They cost context in every
+    // session and most cannot run against the hand-written CDP facade anyway.
+    const { args } = buildMcpSpawnCommand(deps);
+    expect(args).toEqual(
+      expect.arrayContaining(['--no-category-memory', '--no-category-performance', '--no-category-emulation'])
+    );
+  });
+
+  it('keeps the categories the browsing workflow depends on', () => {
+    // input/navigation 是点击与导航，debugging 提供 take_snapshot（uid 定位的唯一来源）,
+    // network 是排查加载失败的唯一手段。误关任何一类都会让浏览器工具链断掉。
+    //
+    // input/navigation drive clicking and navigation, debugging provides take_snapshot (the
+    // only source of uids), and network is the only way to diagnose a failed load. Disabling
+    // any of them breaks the browsing workflow.
+    const { args } = buildMcpSpawnCommand(deps);
+    for (const category of ['input', 'navigation', 'debugging', 'network']) {
+      expect(args).not.toContain(`--no-category-${category}`);
+    }
+  });
+
+  it('caps screenshots at a size that stays legible', () => {
+    // image token 按尺寸算，所以上限直接决定成本；但压过头会让小字认不出来，
+    // 而截图本来就只在「必须看清长什么样」时才用 —— 看不清就等于白花这笔 token。
+    //
+    // Image tokens scale with dimensions, so the cap sets the cost; but over-shrinking makes
+    // small text unreadable, and screenshots are only taken when the answer depends on what
+    // something looks like — illegible means the tokens bought nothing.
+    const { args } = buildMcpSpawnCommand(deps);
+    expect(args[args.indexOf('--screenshot-max-width') + 1]).toBe('1280');
+    expect(args[args.indexOf('--screenshot-max-height') + 1]).toBe('960');
+    expect(args[args.indexOf('--screenshot-format') + 1]).toBe('webp');
+  });
+
   it('hides the child window only on Windows', () => {
     expect(buildMcpSpawnCommand(deps).windowsHide).toBe(true);
     expect(buildMcpSpawnCommand({ ...deps, platform: 'linux' }).windowsHide).toBe(false);

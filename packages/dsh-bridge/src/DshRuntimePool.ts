@@ -56,6 +56,73 @@ export function personaForDshWorkMode(mode: DshWorkMode): string {
 }
 
 /**
+ * 告诉模型它有一个浏览器，以及怎么用。
+ *
+ * 在这之前，三段 work-mode persona 里没有一个字提到应用内浏览器 —— research 模式甚至
+ * 要求「优先一手、权威、当期来源」，却没说它能打开真实网页。模型只能从工具列表里推断
+ * 这些工具是干什么的，于是出现两种典型退化：该开浏览器的时候用 web_fetch 硬啃，以及
+ * 每一步都截图（截图 token 按尺寸算，比 take_snapshot 贵一个量级）。
+ *
+ * 只在浏览器 MCP 真的挂上时才拼接：讲一个不存在的工具比不讲更糟。
+ *
+ * Tell the model it has a browser and how to use it. Until now not one of the three work-mode
+ * personas mentioned the in-app browser — research mode even demands primary, authoritative,
+ * current sources without saying it can open a real page. The model had to infer the tools'
+ * purpose from the tool list, which degrades two predictable ways: grinding through web_fetch
+ * where a browser was needed, and screenshotting every step (screenshot tokens scale with
+ * dimensions and cost an order of magnitude more than take_snapshot).
+ *
+ * Only appended when the browser MCP is actually mounted: describing a tool that is not there
+ * is worse than saying nothing.
+ *
+ * 约束：`dsh-system-prompt` 对 persona 做严格变量插值，除 `{{cwd}}` 外出现任何 `{{…}}`
+ * 都会让整个 runtime 启动失败，所以这段文本里不能有花括号。
+ *
+ * Constraint: `dsh-system-prompt` interpolates the persona strictly, so any `{{…}}` other than
+ * `{{cwd}}` fails the whole runtime at boot — this text must contain no braces.
+ */
+export function browserPersonaSection(mode: DshWorkMode): string {
+  const lines = [
+    'You can drive a real browser through the aionui-browser tools, and its tabs are the ones the user sees on screen.',
+    'Use it when the page needs a signed-in session, interaction such as search boxes, pagination, or forms, or when you must read the page as it actually renders; prefer web_fetch for plain static pages because it is faster and cheaper.',
+    'The normal loop is list_pages, then navigate_page, then take_snapshot to get element uids, then click or fill using those uids.',
+    'Do not screenshot by default: take_snapshot is far cheaper and is what uids come from. Reach for take_screenshot only when the answer depends on what something looks like, such as a chart, a layout problem, or locating a visual element.',
+    'Tool errors start with an upper-case code that tells you what to do. CHALLENGE_REQUIRED or AUTHENTICATION_REQUIRED means you must stop and ask the user to complete it in the Browser tab. USER_TOOK_CONTROL means the user has taken over, so wait instead of competing. RATE_LIMITED means back off until the stated time rather than retrying with a reshaped URL. CAPABILITY_BLOCKED, SENSITIVE_READ_BLOCKED, ACCESS_DENIED and NAVIGATION_BLOCKED are permanent, so never retry them.',
+    'The user is watching these tabs and you are acting inside their signed-in session, so browse only what the task requires and say what you are about to do before acting on their account.',
+  ];
+  if (mode === 'research') {
+    lines.push(
+      'When a claim matters, open the original source in the browser and read it there rather than relying on a search snippet.'
+    );
+  }
+  return lines.join(' ');
+}
+
+/**
+ * 内置浏览器 MCP 是否真的挂上了。
+ *
+ * 名字和 `mcpServers` 都对上才算数。只看其中一个都会说谎：宿主可能给了名字却因为 CDP
+ * 被用户关掉而没注入 server（directBackendManager 正是这么写的），反过来也可能注入的是
+ * 别的内置 MCP。
+ *
+ * 单独成函数是因为它错了不会报错 —— 只是 persona 里少一段，或者多讲一个不存在的工具，
+ * 两种都要跑起来才看得见。
+ *
+ * Whether the built-in browser MCP is actually mounted. The name and `mcpServers` must agree:
+ * either alone would lie, since the host can supply the name yet inject nothing because the user
+ * switched CDP off (exactly what directBackendManager does), and can equally inject a different
+ * built-in MCP. Split out because getting it wrong raises no error — it silently drops a persona
+ * section or describes a tool that is not there, and both only show up at runtime.
+ */
+export function browserToolsMounted(
+  mcpServers: readonly DshMcpServer[] | undefined,
+  name: string | undefined
+): boolean {
+  if (!name) return false;
+  return (mcpServers ?? []).some((server) => server.name === name);
+}
+
+/**
  * Identity of one isolated dsh process.
  *
  * The expert revision is part of the key but never of the `DSH_HOME` path: editing an

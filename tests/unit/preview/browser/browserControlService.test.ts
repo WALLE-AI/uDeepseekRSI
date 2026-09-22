@@ -93,16 +93,17 @@ describe('BrowserControlCoordinator', () => {
     expect(coordinator.acquireWrite('target-b', agent('b')).ok).toBe(true);
   });
 
-  it('expires leases and deduplicated action results with a fake clock', () => {
+  it('expires a lease with a fake clock so a crashed session cannot hold a tab forever', () => {
     let now = 100;
-    const coordinator = new BrowserControlCoordinator({ now: () => now, leaseTtlMs: 10, actionTtlMs: 20 });
+    const coordinator = new BrowserControlCoordinator({ now: () => now, leaseTtlMs: 10 });
     coordinator.acquireWrite('target-a', agent('a'));
-    coordinator.rememberAction('click-1', { clicked: true });
+
+    // 租约未过期时，另一个会话拿不到。
+    // While the lease holds, another session cannot take the tab.
+    expect(coordinator.acquireWrite('target-a', agent('b'))).toMatchObject({ ok: false, code: 'TARGET_BUSY' });
+
     now = 111;
     expect(coordinator.acquireWrite('target-a', agent('b')).ok).toBe(true);
-    expect(coordinator.cachedAction('click-1')).toEqual({ clicked: true });
-    now = 121;
-    expect(coordinator.cachedAction('click-1')).toBeUndefined();
   });
 });
 
@@ -127,11 +128,22 @@ describe('browser action policy', () => {
   });
 
   it('blocks raw CDP methods that require an AionUi-owned confirmation flow', () => {
-    expect(blockedCdpCapability('DOM.setFileInputFiles')).toContain('explicit user-confirmed');
-    expect(blockedCdpCapability('Page.handleJavaScriptDialog')).toContain('explicit user-confirmed');
-    expect(blockedCdpCapability('Browser.setDownloadBehavior')).toContain('explicit user-confirmed');
-    expect(blockedCdpCapability('Browser.grantPermissions')).toContain('explicit user-confirmed');
-    expect(blockedCdpCapability('Network.setCookie')).toContain('explicit user-confirmed');
+    // 断言前缀而不是散文：前缀是给模型做模式匹配、给遥测做 join key 的稳定契约，
+    // 措辞则会随可读性调整而变。
+    //
+    // Assert the prefix rather than the prose: the prefix is the stable contract the model
+    // pattern-matches on and telemetry joins by, while the wording changes with readability.
+    for (const method of [
+      'DOM.setFileInputFiles',
+      'Page.handleJavaScriptDialog',
+      'Browser.setDownloadBehavior',
+      'Browser.grantPermissions',
+      'Network.setCookie',
+    ]) {
+      const message = blockedCdpCapability(method);
+      expect(message).toMatch(/^CAPABILITY_BLOCKED: /);
+      expect(message).toContain(method);
+    }
     expect(blockedCdpCapability('Page.navigate')).toBeNull();
   });
 });

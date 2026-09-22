@@ -178,6 +178,63 @@ describe('expert runtime profile', () => {
     expect(profile.skillDirs).toEqual(['D:/data/skills', join('D:/data/experts/repo-surveyor', 'skills', 'dep-graph')]);
   });
 
+  it('says nothing about the browser when the browser MCP is not mounted', () => {
+    // 描述一个不存在的工具比不描述更糟：模型会去调用，拿到「unknown tool」，然后浪费
+    // 若干轮试图搞清楚发生了什么。
+    //
+    // Describing a tool that is not there is worse than silence: the model calls it, gets
+    // "unknown tool", and burns turns working out what happened.
+    const profile = expertRuntimeProfile({
+      key: modeRuntimeKey('research'),
+      dshHome: DSH_HOME,
+      cwd: CWD,
+      skillsDir: 'D:/data/skills',
+      sharedExpertSkillDirs: [],
+    });
+
+    expect(profile.persona).not.toContain('aionui-browser');
+    expect(profile.persona).not.toContain('take_snapshot');
+  });
+
+  it('teaches the browser workflow when the browser MCP is mounted', () => {
+    const profile = expertRuntimeProfile({
+      key: modeRuntimeKey('research'),
+      dshHome: DSH_HOME,
+      cwd: CWD,
+      skillsDir: 'D:/data/skills',
+      sharedExpertSkillDirs: [],
+      browserToolsAvailable: true,
+    });
+
+    expect(profile.persona).toContain('deep research agent');
+    expect(profile.persona).toContain('aionui-browser');
+    // uid 定位链路，以及「默认别截图」—— 截图 token 按尺寸算，比快照贵一个量级。
+    // The uid loop, plus "do not screenshot by default": screenshot tokens scale with
+    // dimensions and cost an order of magnitude more than a snapshot.
+    expect(profile.persona).toContain('take_snapshot');
+    expect(profile.persona).toContain('Do not screenshot by default');
+    // 失败码必须讲，否则模型只会原地重试。
+    // The failure codes must be stated, or the model just retries in place.
+    expect(profile.persona).toContain('CHALLENGE_REQUIRED');
+    expect(profile.persona).toContain('USER_TOOK_CONTROL');
+    expect(profile.persona).toContain('RATE_LIMITED');
+  });
+
+  it('keeps the browser section free of interpolation tokens that would fail the runtime at boot', () => {
+    const profile = expertRuntimeProfile({
+      key: modeRuntimeKey('coding'),
+      dshHome: DSH_HOME,
+      cwd: CWD,
+      skillsDir: 'D:/data/skills',
+      sharedExpertSkillDirs: [],
+      browserToolsAvailable: true,
+    });
+
+    // `{{cwd}}` 是 mode persona 自己的，合法；除它之外不能再有任何 `{{…}}`。
+    // `{{cwd}}` belongs to the mode persona and is legal; nothing else may appear.
+    expect(profile.persona.replaceAll('{{cwd}}', '')).not.toMatch(/\{\{/);
+  });
+
   it('flattens template braces in author-written prose so the runtime still boots', () => {
     const profile = expertRuntimeProfile({
       key: { mode: 'coding', expertName: 'repo-surveyor', expertRevision: 'r1' },

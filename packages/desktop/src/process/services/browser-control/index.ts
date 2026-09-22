@@ -1,3 +1,4 @@
+export * from './agentErrors';
 export * from './browserDownloads';
 export * from './controlCoordinator';
 export * from './policies';

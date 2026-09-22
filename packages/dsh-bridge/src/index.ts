@@ -2,6 +2,8 @@ export { DshBridge } from './DshBridge';
 export {
   assistantIdForWorkMode,
   DSH_CODING_ASSISTANT_ID,
+  browserPersonaSection,
+  browserToolsMounted,
   DSH_OFFICE_ASSISTANT_ID,
   DSH_RESEARCH_ASSISTANT_ID,
   DSH_WORK_MODES,

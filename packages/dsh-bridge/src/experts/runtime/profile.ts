@@ -7,7 +7,12 @@ import {
   buildModeDelegationSection,
   buildTeamLeadSystemPrompt,
 } from '../persona';
-import { personaForDshWorkMode, type DshRuntimeKey, type DshWorkMode } from '../../DshRuntimePool';
+import {
+  browserPersonaSection,
+  personaForDshWorkMode,
+  type DshRuntimeKey,
+  type DshWorkMode,
+} from '../../DshRuntimePool';
 import { delegationToolName } from './delegation';
 import { allowedDshTools, disabledToolRows } from './toolVocabulary';
 import type { ExpertDetail } from '../types';
@@ -44,6 +49,14 @@ export type ExpertRuntimeProfileOptions = {
    */
   modeDelegates?: readonly ExpertDetail[];
   platform?: NodeJS.Platform;
+  /**
+   * 该 runtime 是否真的挂了内置浏览器 MCP。决定是否把浏览器用法拼进 persona ——
+   * 描述一个不存在的工具比不描述更糟。
+   *
+   * Whether the built-in browser MCP is actually mounted for this runtime. Gates the browser
+   * usage section in the persona: describing a tool that is not there is worse than silence.
+   */
+  browserToolsAvailable?: boolean;
 };
 
 /**
@@ -224,7 +237,14 @@ export function expertPatchYaml(expert: ExpertDetail, cwd: string, platform = pr
 /** Everything a runtime key needs before its dsh process can be spawned. */
 export function expertRuntimeProfile(options: ExpertRuntimeProfileOptions): ExpertRuntimeProfile {
   const { key, expert, dshHome, cwd, skillsDir, sharedExpertSkillDirs } = options;
-  const modePersona = personaForDshWorkMode(key.mode);
+  // 浏览器说明跟在 mode 契约后面、专家契约前面：它描述的是这个 runtime 有什么能力，
+  // 属于外层边界的一部分，而专家只负责在边界内收窄。
+  //
+  // The browser section sits after the mode contract and before the expert's: it describes what
+  // this runtime can do, which belongs to the outer boundary that the expert then narrows.
+  const modePersona = options.browserToolsAvailable
+    ? `${personaForDshWorkMode(key.mode)} ${browserPersonaSection(key.mode)}`
+    : personaForDshWorkMode(key.mode);
   if (!expert) {
     const delegates = options.modeDelegates ?? [];
     const targets = modeDelegationTargets(delegates);
