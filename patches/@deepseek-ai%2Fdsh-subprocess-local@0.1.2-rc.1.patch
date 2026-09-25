@@ -2,7 +2,7 @@ diff --git a/lib/index.js b/lib/index.js
 index b229c8e..7bf0d11 100644
 --- a/lib/index.js
 +++ b/lib/index.js
-@@ -103,7 +103,7 @@ function taskkillTree(pid, force) {
+@@ -108,7 +108,7 @@
  		String(pid),
  		"/T",
  		...force ? ["/F"] : []
@@ -11,7 +11,7 @@ index b229c8e..7bf0d11 100644
  }
  /**
  * True for NULL and INVALID_HANDLE_VALUE returns from Win32 handle APIs.
-@@ -792,7 +792,7 @@ function taskkillProcessTree(pid) {
+@@ -797,7 +797,7 @@
  		String(pid),
  		"/T",
  		"/F"
@@ -20,7 +20,7 @@ index b229c8e..7bf0d11 100644
  }
  /**
  * Signal a detached process tree with platform-correct semantics: POSIX
-@@ -854,7 +854,8 @@ function spawnSubprocess(spec, internals = {}) {
+@@ -853,7 +853,8 @@
  			outMode === "inherit" ? "inherit" : "pipe",
  			errMode === "inherit" ? "inherit" : "pipe"
  		],

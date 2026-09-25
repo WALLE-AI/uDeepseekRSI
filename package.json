@@ -298,5 +298,11 @@
     "@deepseek-ai/dsh-web-fetch-http@0.1.2-rc.1": "patches/@deepseek-ai%2Fdsh-web-fetch-http@0.1.2-rc.1.patch",
     "@deepseek-ai/dsh-win32-process@0.1.2-rc.1": "patches/@deepseek-ai%2Fdsh-win32-process@0.1.2-rc.1.patch"
   },
-  "productName": "uworker"
+  "productName": "uworker",
+  "trustedDependencies": [
+    "better-sqlite3",
+    "electron",
+    "electron-winstaller",
+    "esbuild"
+  ]
 }
