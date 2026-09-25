@@ -3,6 +3,8 @@ import { watch, type FSWatcher } from 'node:fs';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { cp, lstat, mkdir, readFile, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { basename, delimiter, dirname, extname, isAbsolute, join, relative, sep } from 'node:path';
+import { tmpdir } from 'node:os';
+import { Readable } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import { load as parseYaml } from 'js-yaml';
 import { WebSocketServer, type WebSocket } from 'ws';
@@ -327,6 +329,8 @@ export type DshApiServerOptions = {
   delegationSettleMs?: number;
   /** Idle window before an unused expert runtime is reclaimed; `false` keeps them warm. */
   runtimeIdleMs?: number | false;
+  /** Managed upload directory for `/api/fs/upload`; defaults to `temp_dir/aionui/uploads`. */
+  uploadDir?: string;
   agentPortFactory?: (
     handlers: {
       onUpdate: (update: BridgeUpdate) => void;
@@ -348,6 +352,8 @@ const EXPERT_AVATAR_PATH = /^\/api\/experts\/([^/]+)\/avatar$/;
 const SKILL_NAME_PATTERN = PACKAGE_NAME_PATTERN;
 const SKILL_MAX_FILE_BYTES = PACKAGE_MAX_FILE_BYTES;
 const SKILL_MAX_TOTAL_BYTES = PACKAGE_MAX_TOTAL_BYTES;
+/** Per-file cap for `/api/fs/upload`; the renderer maps the 413 to its "file too large" toast. */
+const UPLOAD_MAX_BYTES = 100 * 1024 * 1024;
 
 function defaultAssistantConfig(defaultModelId = DEFAULT_MODEL_ID): StoredAssistantConfig {
   return {
@@ -831,6 +837,91 @@ function projectFileRef(value: unknown): { pe_id: string; relative_path: string 
   return { pe_id: ref.pe_id, relative_path: ref.relative_path };
 }
 
+const FILES_MARKER = '[[AION_FILES]]';
+
+/**
+ * Resolve the send-box's source-tagged file refs (`project` from the Explorer's
+ * add-to-chat, `local` / `upload` from pickers and attachments) to canonical
+ * absolute paths, deduped in order. An `upload` ref must stay inside the managed
+ * upload directory. A ref that no longer resolves (deleted file, unknown pe, path
+ * escaping its root) is skipped so one stale chip never fails the whole turn.
+ */
+async function resolveMessageFiles(projects: StoredProject[], files: unknown, uploadDir: string): Promise<string[]> {
+  if (!Array.isArray(files)) return [];
+  const resolveOne = async (file: unknown): Promise<string | undefined> => {
+    if (!file || typeof file !== 'object') return undefined;
+    const ref = file as Record<string, unknown>;
+    try {
+      if (ref.kind === 'project') return await resolveProjectPath(projects, projectFileRef(ref));
+      if (ref.kind === 'upload' && typeof ref.path === 'string') return await resolveUploadPath(uploadDir, ref.path);
+      if (ref.kind === 'local' && typeof ref.path === 'string' && isAbsolute(ref.path)) return await realpath(ref.path);
+    } catch (error) {
+      console.warn('[dsh-bridge] skipped unresolvable message file ref', ref, error);
+    }
+    return undefined;
+  };
+  const resolved = await Promise.all(files.map(resolveOne));
+  return resolved.filter((path, index): path is string => Boolean(path) && resolved.indexOf(path) === index);
+}
+
+/**
+ * Append the `[[AION_FILES]]` block (one absolute path per line) that the
+ * renderer's `parseFileMarker` turns back into attachment chips. It is kept last
+ * in the message, matching the original backend's send-edge contract.
+ */
+function withFilesMarker(text: string, paths: string[]): string {
+  if (paths.length === 0) return text;
+  return [text, [FILES_MARKER, ...paths].join('\n')].filter(Boolean).join('\n\n');
+}
+
+function isInside(root: string, candidate: string): boolean {
+  const rel = relative(root, candidate);
+  return rel !== '' && rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
+}
+
+/** Canonical path of an uploaded file, rejecting anything outside the managed upload directory. */
+async function resolveUploadPath(uploadDir: string, path: string): Promise<string> {
+  if (!isAbsolute(path)) throw new Error('UPLOAD_PATH_INVALID');
+  const [root, canonical] = await Promise.all([realpath(uploadDir), realpath(path)]);
+  if (!isInside(root, canonical)) throw new Error('UPLOAD_PATH_OUTSIDE_MANAGED_DIR');
+  return canonical;
+}
+
+const WINDOWS_RESERVED_NAME = /^(con|prn|aux|nul|com\d|lpt\d)(\..*)?$/i;
+
+/**
+ * Reduce a client-supplied name to one safe path segment: drop any directory
+ * part, characters Windows forbids, and trailing dots/spaces; prefix reserved
+ * device names. Never returns an empty or traversal segment.
+ */
+function safeUploadFileName(name: string): string {
+  const base = (name.split(/[\\/]/).pop() ?? '')
+    // oxlint-disable-next-line no-control-regex -- stripping control characters is the point
+    .replace(/[<>:"|?*\u0000-\u001f]/g, '_')
+    .replace(/[. ]+$/, '')
+    .trim();
+  if (!base || base === '.' || base === '..') return 'upload';
+  return WINDOWS_RESERVED_NAME.test(base) ? `_${base}` : base;
+}
+
+/** Write `data` under `dir` as `name`, suffixing `_2`, `_3`… instead of overwriting an existing file. */
+async function writeUniqueFile(dir: string, name: string, data: Uint8Array): Promise<string> {
+  const dot = name.lastIndexOf('.');
+  const stem = dot > 0 ? name.slice(0, dot) : name;
+  const ext = dot > 0 ? name.slice(dot) : '';
+  for (let attempt = 1; ; attempt += 1) {
+    const target = join(dir, attempt === 1 ? name : `${stem}_${attempt}${ext}`);
+    try {
+      // Sequential by design: each attempt depends on the previous name being taken.
+      // oxlint-disable-next-line no-await-in-loop
+      await writeFile(target, data, { flag: 'wx' });
+      return target;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST' || attempt >= 1000) throw error;
+    }
+  }
+}
+
 function mimeType(path: string): string {
   const extension = extname(path).toLocaleLowerCase();
   return (
@@ -1265,6 +1356,58 @@ export class DshApiServer {
         `[dsh-bridge] Failed to prewarm ${runtimeKeyId(key)} runtime from ${source} (${error instanceof Error ? error.name : 'UnknownError'}).`
       );
     }
+  }
+
+  get #uploadDir(): string {
+    return this.#options.uploadDir ?? join(tmpdir(), 'aionui', 'uploads');
+  }
+
+  /**
+   * `POST /api/fs/upload` (multipart: `file`, optional `file_name` /
+   * `conversation_id`): stores a device file the renderer dragged or pasted in
+   * and returns its absolute path, which the send box then sends as an `upload`
+   * ref. Files land in `<uploadDir>/<conversation_id | temp>/`; the DSH sandbox
+   * confines writes only, so the agent can read them from there.
+   */
+  async #handleUpload(request: IncomingMessage, response: ServerResponse): Promise<void> {
+    const declared = Number(request.headers['content-length']);
+    if (Number.isFinite(declared) && declared > UPLOAD_MAX_BYTES) {
+      request.resume();
+      responseData(response, { error: 'File too large.', code: 'FILE_TOO_LARGE' }, 413);
+      return;
+    }
+    let form: FormData;
+    try {
+      form = await new Request('http://127.0.0.1/api/fs/upload', {
+        method: 'POST',
+        headers: { 'content-type': request.headers['content-type'] ?? '' },
+        body: Readable.toWeb(request) as ReadableStream<Uint8Array>,
+        duplex: 'half',
+      } as RequestInit).formData();
+    } catch {
+      responseData(response, { error: 'Expected a multipart upload.', code: 'UPLOAD_INVALID' }, 400);
+      return;
+    }
+    const file = form.get('file');
+    if (!file || typeof file === 'string') {
+      responseData(response, { error: 'Missing upload file.', code: 'UPLOAD_INVALID' }, 400);
+      return;
+    }
+    if (file.size > UPLOAD_MAX_BYTES) {
+      responseData(response, { error: 'File too large.', code: 'FILE_TOO_LARGE' }, 413);
+      return;
+    }
+    const requestedName = form.get('file_name');
+    const conversationId = form.get('conversation_id');
+    const bucket =
+      typeof conversationId === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(conversationId) ? conversationId : 'temp';
+    const dir = join(this.#uploadDir, bucket);
+    await mkdir(dir, { recursive: true });
+    const name = safeUploadFileName(
+      typeof requestedName === 'string' && requestedName.trim() ? requestedName : file.name
+    );
+    const target = await writeUniqueFile(dir, name, new Uint8Array(await file.arrayBuffer()));
+    responseData(response, await realpath(target));
   }
 
   async #officeFilePath(body: Record<string, unknown>): Promise<string> {
@@ -2646,7 +2789,8 @@ export class DshApiServer {
     text: string,
     turnId: string,
     messageId: string,
-    explicitSkillIds: string[] = []
+    explicitSkillIds: string[] = [],
+    filePaths: string[] = []
   ): Promise<void> {
     try {
       await this.#ensureSession(conversation);
@@ -2671,7 +2815,9 @@ export class DshApiServer {
       // No expert preamble here on purpose: the expert's persona is the runtime's
       // `system-prompt.persona`, so it survives compaction instead of being evicted as
       // ordinary history the way an in-band first-turn injection was.
-      const promptText = [text, skillGestures.join(' ')].filter(Boolean).join('\n\n');
+      // The file block goes last, after the skill gestures, so its path list is
+      // never extended by a trailing `/skill` line.
+      const promptText = withFilesMarker([text, skillGestures.join(' ')].filter(Boolean).join('\n\n'), filePaths);
       this.#traceTurn(conversation.id, 'prompt_sent');
       const stopReason = await this.#bridge?.prompt(conversation.id, promptText, turnId);
       if (needsSkillInjection && session) conversation.extra.skills_injected_session_id = session.sessionId;
@@ -3311,6 +3457,10 @@ export class DshApiServer {
           return;
         }
       }
+      if (path === '/api/fs/upload' && method === 'POST') {
+        await this.#handleUpload(request, response);
+        return;
+      }
       if (path === '/api/fs/content' && (method === 'POST' || method === 'PUT')) {
         const body = await readJsonBody(request);
         const ref = projectFileRef(body.file);
@@ -3688,7 +3838,9 @@ export class DshApiServer {
             return;
           }
           const body = await readJsonBody(request);
-          const text = typeof body.content === 'string' ? body.content : '';
+          const userText = typeof body.content === 'string' ? body.content : '';
+          const filePaths = await resolveMessageFiles(this.#state.projects, body.files, this.#uploadDir);
+          const text = withFilesMarker(userText, filePaths);
           const explicitSkillIds = stringArray(body.inject_skills);
           if (!text.trim()) {
             responseData(response, { error: 'Message content is empty.', code: 'INVALID_MESSAGE' }, 400);
@@ -3756,7 +3908,7 @@ export class DshApiServer {
           });
           await this.#persist();
           this.#traceTurn(conversationId, 'message_accepted');
-          void this.#sendPrompt(conversation, text, turnId, assistantId, explicitSkillIds);
+          void this.#sendPrompt(conversation, userText, turnId, assistantId, explicitSkillIds, filePaths);
           responseData(response, { msg_id: userId, turn_id: turnId, runtime: conversation.runtime }, 202);
           return;
         }

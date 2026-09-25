@@ -1,5 +1,5 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
-import { createServer as createHttpServer } from 'node:http';
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { createServer as createHttpServer, request as httpRequest } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join, resolve as resolvePath } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -29,6 +29,20 @@ afterEach(async () => {
   await Promise.all(cleanups.splice(0).map((cleanup) => cleanup()));
   vi.restoreAllMocks();
 });
+
+/** Multipart POST to the bridge's `/api/fs/upload`, the way the renderer's FileService sends it. */
+async function uploadFile(
+  baseUrl: string,
+  fields: Record<string, string>,
+  content = 'payload',
+  name = 'a.txt'
+): Promise<{ status: number; body: { success: boolean; data: string } }> {
+  const form = new FormData();
+  form.append('file', new Blob([content]), name);
+  for (const [key, value] of Object.entries(fields)) form.append(key, value);
+  const response = await fetch(`${baseUrl}/api/fs/upload`, { method: 'POST', body: form });
+  return { status: response.status, body: (await response.json()) as { success: boolean; data: string } };
+}
 
 async function createServer(
   env?: NodeJS.ProcessEnv,
@@ -93,6 +107,7 @@ async function createServer(
     cwd: root,
     dshHome: join(root, 'dsh'),
     dataFile: join(root, 'state.json'),
+    uploadDir: join(root, 'uploads'),
     agentPortFactory: (handlers, _mode, key) => {
       emitUpdate = handlers.onUpdate;
       requestPermission = handlers.onPermissionRequest;
@@ -1302,6 +1317,157 @@ describe('direct DeepSeek Harness HTTP backend', () => {
     const latestPlan = (await latestPlanResponse.json()) as { data: unknown };
     expect(latestPlanResponse.status).toBe(200);
     expect(latestPlan.data).toBeNull();
+  });
+
+  it('resolves add-to-chat project file refs into the prompt and the stored user message', async () => {
+    const { baseUrl, root, prompts } = await createServer();
+    await writeFile(join(root, 'hello.txt'), 'hello workspace', 'utf8');
+    const created = (await (
+      await fetch(`${baseUrl}/api/conversations`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ extra: { workspace: root } }),
+      })
+    ).json()) as { data: { id: string; project_id: string } };
+    const project = (await (await fetch(`${baseUrl}/api/projects/${created.data.project_id}`)).json()) as {
+      data: { explorer: { workspace_pe_id: string } };
+    };
+    const peId = project.data.explorer.workspace_pe_id;
+
+    const sent = await fetch(`${baseUrl}/api/conversations/${created.data.id}/messages`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        content: 'summarize this',
+        files: [
+          { kind: 'project', pe_id: peId, relative_path: 'hello.txt' },
+          { kind: 'project', pe_id: peId, relative_path: 'hello.txt' },
+          { kind: 'project', pe_id: peId, relative_path: '' },
+          { kind: 'project', pe_id: peId, relative_path: '../outside.txt' },
+          { kind: 'project', pe_id: peId, relative_path: 'missing.txt' },
+        ],
+      }),
+    });
+    expect(sent.status).toBe(202);
+
+    const workspace = await realpath(root);
+    // Deduped, the pe root (a directory) included, the escaping and missing refs skipped.
+    const expected = `summarize this\n\n[[AION_FILES]]\n${await realpath(join(root, 'hello.txt'))}\n${workspace}`;
+    await vi.waitFor(() => expect(prompts).toEqual([expected]));
+    const messages = (await (await fetch(`${baseUrl}/api/conversations/${created.data.id}/messages`)).json()) as {
+      data: { items: Array<{ position: string; content: { content: string } }> };
+    };
+    expect(messages.data.items[0]).toMatchObject({ position: 'right', content: { content: expected } });
+  });
+
+  it('accepts a files-only message and still rejects an empty one', async () => {
+    const { baseUrl, root, prompts } = await createServer();
+    await writeFile(join(root, 'only.txt'), 'only', 'utf8');
+    const created = (await (
+      await fetch(`${baseUrl}/api/conversations`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ extra: {} }),
+      })
+    ).json()) as { data: { id: string } };
+    const url = `${baseUrl}/api/conversations/${created.data.id}/messages`;
+
+    const empty = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: '  ', files: [{ kind: 'local', path: join(root, 'missing.txt') }] }),
+    });
+    expect(empty.status).toBe(400);
+
+    const filesOnly = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: '', files: [{ kind: 'local', path: join(root, 'only.txt') }] }),
+    });
+    expect(filesOnly.status).toBe(202);
+    const onlyPath = await realpath(join(root, 'only.txt'));
+    await vi.waitFor(() => expect(prompts).toEqual([`[[AION_FILES]]\n${onlyPath}`]));
+  });
+
+  describe('/api/fs/upload', () => {
+    it('stores a dropped/pasted file per conversation without overwriting and returns its path', async () => {
+      const { baseUrl, root } = await createServer();
+      const first = await uploadFile(baseUrl, { conversation_id: 'conv_1' }, 'first', 'notes.txt');
+      const second = await uploadFile(baseUrl, { conversation_id: 'conv_1' }, 'second', 'notes.txt');
+      const uploadDir = await realpath(join(root, 'uploads'));
+
+      expect(first).toEqual({ status: 200, body: { success: true, data: join(uploadDir, 'conv_1', 'notes.txt') } });
+      expect(second.body.data).toBe(join(uploadDir, 'conv_1', 'notes_2.txt'));
+      expect(await readFile(first.body.data, 'utf8')).toBe('first');
+      expect(await readFile(second.body.data, 'utf8')).toBe('second');
+    });
+
+    it('keeps hostile names and conversation ids inside the managed directory', async () => {
+      const { baseUrl, root } = await createServer();
+      const uploadDir = join(root, 'uploads');
+
+      const traversal = await uploadFile(baseUrl, { conversation_id: '../escape', file_name: '..\\..\\evil.txt' });
+      const reserved = await uploadFile(baseUrl, { file_name: 'CON.txt' });
+
+      expect(traversal.body.data).toBe(join(await realpath(uploadDir), 'temp', 'evil.txt'));
+      expect(reserved.body.data).toBe(join(await realpath(uploadDir), 'temp', '_CON.txt'));
+    });
+
+    it('rejects a non-multipart body and an oversized declared length', async () => {
+      const { baseUrl, serverPort } = await createServer();
+      const invalid = await fetch(`${baseUrl}/api/fs/upload`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}',
+      });
+      expect(invalid.status).toBe(400);
+
+      const status = await new Promise<number>((resolve, reject) => {
+        const request = httpRequest(
+          {
+            host: '127.0.0.1',
+            port: serverPort,
+            path: '/api/fs/upload',
+            method: 'POST',
+            headers: { 'Content-Type': 'multipart/form-data; boundary=x', 'Content-Length': 200 * 1024 * 1024 },
+          },
+          (response) => {
+            resolve(response.statusCode ?? 0);
+            request.destroy();
+          }
+        );
+        request.on('error', reject);
+        request.flushHeaders();
+      });
+      expect(status).toBe(413);
+    });
+
+    it('sends an uploaded file to the model and skips upload refs outside the managed directory', async () => {
+      const { baseUrl, root, prompts } = await createServer();
+      await writeFile(join(root, 'outside.txt'), 'outside', 'utf8');
+      const created = (await (
+        await fetch(`${baseUrl}/api/conversations`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ extra: {} }),
+        })
+      ).json()) as { data: { id: string } };
+      const uploaded = await uploadFile(baseUrl, { conversation_id: created.data.id }, 'pasted', 'shot.png');
+
+      const sent = await fetch(`${baseUrl}/api/conversations/${created.data.id}/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          content: 'look',
+          files: [
+            { kind: 'upload', path: uploaded.body.data },
+            { kind: 'upload', path: join(root, 'outside.txt') },
+          ],
+        }),
+      });
+      expect(sent.status).toBe(202);
+      await vi.waitFor(() => expect(prompts).toEqual([`look\n\n[[AION_FILES]]\n${uploaded.body.data}`]));
+    });
   });
 
   it('aligns the conversation, project explorer, and file preview to one workspace', async () => {
