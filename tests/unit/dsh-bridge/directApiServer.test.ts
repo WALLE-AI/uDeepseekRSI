@@ -478,6 +478,54 @@ describe('direct DeepSeek Harness HTTP backend', () => {
     expect(body.code).toBe('CONVERSATION_BUSY');
   });
 
+  it('classifies a provider HTTP failure into a specific USER_LLM_PROVIDER_* error code', async () => {
+    const { baseUrl, serverPort } = await createServer(undefined, undefined, {
+      portOverrides: {
+        prompt: async () => {
+          throw new Error('Internal error: turn failed: 402 status code (no body)');
+        },
+      },
+    });
+    const created = (await (
+      await fetch(`${baseUrl}/api/conversations`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ extra: {} }),
+      })
+    ).json()) as { data: { id: string } };
+
+    const socket = new WebSocket(`ws://127.0.0.1:${serverPort}/ws`);
+    await new Promise<void>((resolve, reject) => {
+      socket.once('open', () => resolve());
+      socket.once('error', reject);
+    });
+    const errorFrame = new Promise<Record<string, unknown>>((resolve) => {
+      socket.on('message', (raw) => {
+        const frame = JSON.parse(raw.toString()) as {
+          name: string;
+          data: { type: string; data: Record<string, unknown> };
+        };
+        if (frame.name === 'message.stream' && frame.data.type === 'error') resolve(frame.data.data);
+      });
+    });
+    cleanups.push(async () => socket.close());
+
+    await fetch(`${baseUrl}/api/conversations/${created.data.id}/messages`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: 'hello' }),
+    });
+
+    await expect(errorFrame).resolves.toMatchObject({
+      message: 'Internal error: turn failed: 402 status code (no body)',
+      code: 'USER_LLM_PROVIDER_BILLING_REQUIRED',
+      ownership: 'user_llm_provider',
+      retryable: false,
+      feedback_recommended: false,
+      resolution: { kind: 'check_provider_billing', target: 'provider_settings' },
+    });
+  });
+
   it('skips matching startup config and maps thought level to ACP reasoning effort', async () => {
     const modelValue = '["deepseek-official","deepseek-v4-flash"]';
     const { baseUrl, setConfigCalls } = await createServer(undefined, undefined, {
@@ -840,6 +888,46 @@ describe('direct DeepSeek Harness HTTP backend', () => {
     );
   });
 
+  it('reports no default model when neither a provider nor an env credential is configured', async () => {
+    const { baseUrl } = await createServer({});
+    const agents = (await (await fetch(`${baseUrl}/api/agents`)).json()) as {
+      data: Array<{
+        config_options: { config_options: Array<{ id: string; current_value?: string; options: unknown[] }> };
+        available_models: {
+          current_model_id: string | null;
+          current_model_label: string | null;
+          available_models: Array<{ id: string; label: string }>;
+        };
+      }>;
+    };
+
+    expect(agents.data[0].available_models.current_model_id).toBeNull();
+    expect(agents.data[0].available_models.current_model_label).toBeNull();
+    expect(agents.data[0].available_models.available_models).toEqual([]);
+    const modelOption = agents.data[0].config_options.config_options.find((option) => option.id === 'model');
+    expect(modelOption?.current_value).toBeUndefined();
+    expect(modelOption?.options).toEqual([]);
+  });
+
+  it('keeps the built-in default model when DEEPSEEK_API_KEY is set via env with no UI provider', async () => {
+    const { baseUrl } = await createServer({ DEEPSEEK_API_KEY: 'env-only-key' });
+    const agents = (await (await fetch(`${baseUrl}/api/agents`)).json()) as {
+      data: Array<{
+        available_models: {
+          current_model_id: string | null;
+          current_model_label: string | null;
+          available_models: Array<{ id: string; label: string }>;
+        };
+      }>;
+    };
+
+    expect(agents.data[0].available_models.current_model_id).toBe('deepseek-v4-flash');
+    expect(agents.data[0].available_models.current_model_label).toBe('deepseek-v4-flash');
+    expect(agents.data[0].available_models.available_models).toEqual([
+      { id: 'deepseek-v4-flash', label: 'deepseek-v4-flash' },
+    ]);
+  });
+
   it('serializes concurrent state writes', async () => {
     const { baseUrl } = await createServer();
     const responses = await Promise.all(
@@ -883,6 +971,25 @@ describe('direct DeepSeek Harness HTTP backend', () => {
     expect(detail.data.defaults.model).toMatchObject({ mode: 'fixed' });
     expect(typeof detail.data.defaults.model.value).toBe('string');
     expect(detail.data.preferences.last_mcp_ids).toEqual([]);
+  });
+
+  it('lists no models for the builtin assistants when neither a provider nor an env credential is configured', async () => {
+    const { baseUrl } = await createServer({});
+    const response = await fetch(`${baseUrl}/api/assistants`);
+    const body = (await response.json()) as { data: Array<{ models: string[] }> };
+
+    expect(response.status).toBe(200);
+    expect(body.data.every((assistant) => assistant.models.length === 0)).toBe(true);
+  });
+
+  it('lists the built-in default model for the builtin assistants when DEEPSEEK_API_KEY is set via env', async () => {
+    const { baseUrl } = await createServer({ DEEPSEEK_API_KEY: 'env-only-key' });
+    const response = await fetch(`${baseUrl}/api/assistants`);
+    const body = (await response.json()) as { data: Array<{ models: string[] }> };
+
+    expect(response.status).toBe(200);
+    expect(body.data.every((assistant) => assistant.models.length > 0)).toBe(true);
+    expect(body.data.map((assistant) => assistant.models)).toEqual(body.data.map(() => ['deepseek-v4-flash']));
   });
 
   it('imports a skill and injects an assistant default only once per dsh session', async () => {

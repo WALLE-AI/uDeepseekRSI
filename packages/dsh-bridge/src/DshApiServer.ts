@@ -541,6 +541,85 @@ function gatewayBaseUrl(env: NodeJS.ProcessEnv): string | undefined {
   return env.DEEPSEEK_URL?.trim() || env.DEEPSEEK_BASE_URL?.trim() || undefined;
 }
 
+/** Whether the built-in default backend can actually authenticate without any UI-configured provider. */
+function hasEnvModelSource(env: NodeJS.ProcessEnv): boolean {
+  return Boolean(gatewayBaseUrl(env) || env.DEEPSEEK_API_KEY?.trim());
+}
+
+type ProviderTurnErrorClassification = {
+  code: string;
+  ownership: 'user_llm_provider';
+  retryable: boolean;
+  feedback_recommended: boolean;
+  resolution: { kind: string; target?: string };
+};
+
+/**
+ * Classifies a raw `turn failed: <status> ...` message (the OpenAI-compatible client's
+ * own error text, forwarded unchanged from the dsh runtime) into one of the app's existing
+ * `USER_LLM_PROVIDER_*` error codes, so the UI can show a specific reason (invalid key,
+ * insufficient balance, rate limited, unreachable, ...) instead of a raw status string.
+ */
+function classifyProviderTurnError(message: string): ProviderTurnErrorClassification | undefined {
+  const statusMatch = message.match(/turn failed:\s*(\d{3})\b/);
+  const status = statusMatch ? Number(statusMatch[1]) : undefined;
+  const base = { ownership: 'user_llm_provider' as const, feedback_recommended: false };
+  switch (status) {
+    case 400:
+      return {
+        ...base,
+        code: 'USER_LLM_PROVIDER_INVALID_REQUEST',
+        retryable: false,
+        resolution: { kind: 'reduce_context' },
+      };
+    case 401:
+      return {
+        ...base,
+        code: 'USER_LLM_PROVIDER_AUTH_FAILED',
+        retryable: false,
+        resolution: { kind: 'check_provider_credentials', target: 'provider_settings' },
+      };
+    case 402:
+      return {
+        ...base,
+        code: 'USER_LLM_PROVIDER_BILLING_REQUIRED',
+        retryable: false,
+        resolution: { kind: 'check_provider_billing', target: 'provider_settings' },
+      };
+    case 403:
+      return {
+        ...base,
+        code: 'USER_LLM_PROVIDER_PERMISSION_DENIED',
+        retryable: false,
+        resolution: { kind: 'check_provider_credentials', target: 'provider_settings' },
+      };
+    case 404:
+      return {
+        ...base,
+        code: 'USER_LLM_PROVIDER_MODEL_NOT_FOUND',
+        retryable: false,
+        resolution: { kind: 'change_model' },
+      };
+    case 408:
+      return { ...base, code: 'USER_LLM_PROVIDER_TIMEOUT', retryable: true, resolution: { kind: 'retry' } };
+    case 429:
+      return { ...base, code: 'USER_LLM_PROVIDER_RATE_LIMITED', retryable: true, resolution: { kind: 'retry' } };
+    default:
+      if (status !== undefined && status >= 500 && status < 600) {
+        return { ...base, code: 'USER_LLM_PROVIDER_GATEWAY_ERROR', retryable: true, resolution: { kind: 'retry' } };
+      }
+      if (/ECONNREFUSED|ENOTFOUND|ETIMEDOUT|EAI_AGAIN|ECONNRESET|fetch failed|network error/i.test(message)) {
+        return {
+          ...base,
+          code: 'USER_LLM_PROVIDER_NETWORK_ERROR',
+          retryable: true,
+          resolution: { kind: 'check_provider_base_url', target: 'provider_settings' },
+        };
+      }
+      return undefined;
+  }
+}
+
 function normalizeBaseUrl(value: unknown): string {
   if (typeof value !== 'string' || !value.trim()) {
     throw new DshApiError(400, 'PROVIDER_BASE_URL_INVALID', 'A Base URL is required.');
@@ -2649,9 +2728,10 @@ export class DshApiServer {
     } catch (error) {
       conversation.status = 'finished';
       conversation.runtime = idleRuntime();
+      const message = error instanceof Error ? error.message : String(error);
       this.#emit('message.stream', {
         type: 'error',
-        data: { message: error instanceof Error ? error.message : String(error) },
+        data: { message, ...classifyProviderTurnError(message) },
         msg_id: messageId,
         turn_id: turnId,
         conversation_id: conversation.id,
@@ -3884,7 +3964,7 @@ export class DshApiServer {
       custom_skill_names: [],
       disabled_builtin_skills: config.disabledBuiltinSkills,
       prompts: [],
-      models: this.#models.map((model) => model.id),
+      models: this.#hasConfiguredModelSource() ? this.#models.map((model) => model.id) : [],
       agent_status: 'online',
       team_selectable: false,
       team_block_reason: 'Direct deepseek-harness sessions are single-agent.',
@@ -3941,9 +4021,24 @@ export class DshApiServer {
     };
   }
 
+  /** Whether the default model shown to the user is actually backed by a working credential. */
+  #hasConfiguredModelSource(): boolean {
+    const hasUiProvider = this.#state.providers.some(
+      (provider) => provider.id === this.#state.defaultProviderId && provider.enabled !== false
+    );
+    return hasUiProvider || hasEnvModelSource(this.#runtimeEnv);
+  }
+
   #agentRecord(mode: DshWorkMode): Record<string, unknown> {
+    const hasModelSource = this.#hasConfiguredModelSource();
     const defaultModelId = this.#defaultModelId();
-    const configOptions = this.#uiConfigOptions([], defaultModelId);
+    // The ACP session bootstrap always needs a concrete technical default (see #assistantConfig),
+    // but nothing should be displayed to the user as "the current model" unless it can actually work.
+    const configOptions = this.#uiConfigOptions([], defaultModelId).map((option) =>
+      option.id === 'model' && !hasModelSource
+        ? { ...option, currentValue: undefined, current_value: undefined, options: [] }
+        : option
+    );
     const assistantId = assistantIdForWorkMode(mode);
     return {
       id: assistantId,
@@ -3956,9 +4051,9 @@ export class DshApiServer {
       status: 'online',
       config_options: { config_options: configOptions },
       available_models: {
-        current_model_id: defaultModelId,
-        current_model_label: defaultModelId,
-        available_models: this.#modelOptions(),
+        current_model_id: hasModelSource ? defaultModelId : null,
+        current_model_label: hasModelSource ? defaultModelId : null,
+        available_models: hasModelSource ? this.#modelOptions() : [],
       },
       available_modes: { current_mode_id: 'default', available_modes: [] },
     };

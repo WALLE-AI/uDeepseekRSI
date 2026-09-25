@@ -284,13 +284,23 @@ const GuidModelSelector: React.FC<GuidModelSelectorProps> = ({
     );
   }
 
-  // Fallback: no model switching
+  // Fallback: no model switching — distinguish "backend just doesn't support switching"
+  // (a real model is active) from "nothing is configured at all" (no model reported).
+  const hasNoConfiguredModel =
+    !currentAcpCachedModelInfo?.current_model_id && !currentAcpCachedModelInfo?.current_model_label;
   return (
-    <Tooltip content={t('conversation.welcome.modelSwitchNotSupported')} position='top'>
+    <Tooltip
+      content={
+        hasNoConfiguredModel ? t('conversation.noModelConfigured') : t('conversation.welcome.modelSwitchNotSupported')
+      }
+      position='top'
+    >
       <Button className={'sendbox-model-btn guid-config-btn'} shape='round' size='small' style={{ cursor: 'default' }}>
         <span className='flex items-center gap-6px min-w-0'>
           <Brain theme='outline' size='14' fill={iconColors.secondary} className='shrink-0' />
-          <span className='guid-model-label'>{defaultModelLabel}</span>
+          <span className='guid-model-label'>
+            {hasNoConfiguredModel ? t('settings.noAvailableModels') : defaultModelLabel}
+          </span>
         </span>
       </Button>
     </Tooltip>
